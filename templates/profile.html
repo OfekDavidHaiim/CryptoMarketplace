@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>My Profile</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .profile-header { background: linear-gradient(135deg, #0d6efd, #0dcaf0); color: white; padding: 40px 0; margin-bottom: 30px; }
+        .avatar-img { width: 120px; height: 120px; border-radius: 50%; border: 4px solid white; object-fit: cover; }
+
+        /* תיקון הריבועים הלבנים: הוספנו צבע טקסט כהה (#333) ורוחב מינימלי */
+        .stat-box { background: white; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.05); color: #333; min-width: 100px; }
+
+        .product-img { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; }
+        .badge-promoted { background: linear-gradient(45deg, #ffc107, #ff9800); color: black; }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="/">🔙 Back to Home</a>
+        </div>
+    </nav>
+
+    <div class="profile-header text-center">
+        <div class="container">
+            <div class="position-relative d-inline-block">
+                {% if user.avatar %}
+                    <img src="{{ user.avatar if 'http' in user.avatar else '/static/uploads/' + user.avatar }}" class="avatar-img" id="profileAvatar">
+                {% else %}
+                    <img src="https://via.placeholder.com/150" class="avatar-img" id="profileAvatar">
+                {% endif %}
+                <button class="btn btn-sm btn-light position-absolute bottom-0 end-0 rounded-circle" onclick="document.getElementById('avatarInput').click()">📷</button>
+                <input type="file" id="avatarInput" hidden accept="image/*" onchange="uploadAvatar()">
+            </div>
+            <h3 class="mt-3">{{ user.username }}</h3>
+            <p class="opacity-75">Joined: {{ user.created_at.strftime('%Y-%m-%d') }}</p>
+
+            <div class="d-flex justify-content-center gap-3 mt-3">
+                <div class="stat-box">
+                    <h5 class="mb-0">{{ user.avg_rating }} ⭐</h5>
+                    <small>Rating</small>
+                </div>
+                <div class="stat-box">
+                    <h5 class="mb-0">{{ products|length }}</h5>
+                    <small>Items</small>
+                </div>
+                <div class="stat-box">
+                    <h5 class="mb-0 text-success">{{ "Yes" if user.is_verified else "No" }}</h5>
+                    <small>Verified</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container pb-5">
+        <h4 class="mb-4">My Listings</h4>
+
+        <div class="card shadow-sm">
+            <div class="card-body p-0">
+                <div class="list-group list-group-flush">
+                    {% for product in products %}
+                    <div class="list-group-item d-flex align-items-center justify-content-between p-3" id="row-{{ product._id }}">
+                        <div class="d-flex align-items-center">
+                            <img src="{{ product.image if product.image else product.images[0] }}" class="product-img me-3">
+                            <div>
+                                <h6 class="mb-1">
+                                    {{ product.title }}
+                                    {% if product.is_promoted %}
+                                        <span class="badge badge-promoted">🚀 Promoted</span>
+                                    {% endif %}
+                                </h6>
+                                <small class="text-muted">{{ product.price }} {{ product.currency }}</small>
+
+                                <div class="mt-1">
+                                    {% if product.status == 'available' %}
+                                        <span class="badge bg-success">Active</span>
+                                    {% elif product.status == 'hold' %}
+                                        <span class="badge bg-warning text-dark">On Hold</span>
+                                    {% elif product.status == 'sold' %}
+                                        <span class="badge bg-secondary">Sold</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            {% if product.status != 'sold' %}
+                                {% if not product.is_promoted %}
+                                    <button class="btn btn-warning btn-sm me-1" onclick="openPromoteModal('{{ product._id }}', '{{ product.title }}')">🚀 Promote</button>
+                                {% endif %}
+
+                                <div class="btn-group me-1">
+                                    <button type="button" class="btn btn-outline-primary btn-sm dropdown-toggle" data-bs-toggle="dropdown">Status</button>
+                                    <ul class="dropdown-menu">
+                                        <li><a class="dropdown-item" href="#" onclick="updateStatus('{{ product._id }}', 'available')">🟢 Active</a></li>
+                                        <li><a class="dropdown-item" href="#" onclick="updateStatus('{{ product._id }}', 'hold')">🟡 Hold</a></li>
+                                        <li><a class="dropdown-item" href="#" onclick="updateStatus('{{ product._id }}', 'sold')">🔴 Sold</a></li>
+                                    </ul>
+                                </div>
+                            {% else %}
+                                <button class="btn btn-secondary btn-sm me-1" disabled>Sold Out</button>
+                            {% endif %}
+
+                            <button class="btn btn-outline-danger btn-sm" onclick="deleteProduct('{{ product._id }}')">🗑️</button>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="p-4 text-center text-muted">You haven't listed any items yet.</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="promoteModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-warning text-dark">
+                    <h5 class="modal-title">🚀 Boost Your Listing</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Promote <strong><span id="promoProductTitle"></span></strong>!</p>
+
+                    <div class="mb-3">
+                        <label class="form-label">Duration:</label>
+                        <select class="form-select" id="promoDays" onchange="calculatePrice()">
+                            <option value="1">1 Day ($2.00)</option>
+                            <option value="3">3 Days ($6.00)</option>
+                            <option value="7">7 Days ($7.00 - Deal!)</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Payment Method:</label>
+                        <div class="d-grid gap-2">
+                            <input type="radio" class="btn-check" name="payMethod" id="payUSD" value="USD" checked onchange="calculatePrice()">
+                            <label class="btn btn-outline-secondary" for="payUSD">Pay with USD (Card)</label>
+
+                            <input type="radio" class="btn-check" name="payMethod" id="payToken" value="FREE_COIN" onchange="calculatePrice()">
+                            <label class="btn btn-outline-primary" for="payToken">
+                                <strong>Pay with FREE Coin</strong> <span class="badge bg-danger">15% OFF</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <hr>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h5>Total:</h5>
+                        <h3 id="finalPrice" class="text-success">$2.00</h3>
+                    </div>
+
+                    <input type="hidden" id="promoProductId">
+                    <button class="btn btn-success w-100 mt-3" onclick="submitPromotion()">Pay & Promote</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        async function uploadAvatar() {
+            const file = document.getElementById('avatarInput').files[0];
+            const formData = new FormData();
+            formData.append('avatar', file);
+            const res = await fetch('/upload-avatar', { method: 'POST', body: formData });
+            if (res.ok) location.reload();
+        }
+
+        async function deleteProduct(id) {
+            if (!confirm("Delete item?")) return;
+            const res = await fetch(`/delete-product/${id}`, { method: 'POST' });
+            if (res.ok) document.getElementById(`row-${id}`).remove();
+        }
+
+        // --- פונקציה לעדכון סטטוס (החלק שהיה חסר) ---
+        async function updateStatus(id, newStatus) {
+            const res = await fetch('/update-status', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ product_id: id, status: newStatus })
+            });
+            if (res.ok) location.reload();
+        }
+
+        // --- לוגיקה לקידום ---
+        const promoteModal = new bootstrap.Modal(document.getElementById('promoteModal'));
+        function openPromoteModal(id, title) {
+            document.getElementById('promoProductId').value = id;
+            document.getElementById('promoProductTitle').innerText = title;
+            promoteModal.show();
+        }
+        function calculatePrice() {
+            const days = parseInt(document.getElementById('promoDays').value);
+            const isToken = document.getElementById('payToken').checked;
+            let total = (days >= 7 ? 1 : 2) * days;
+            if (isToken) total *= 0.85;
+            document.getElementById('finalPrice').innerText = '$' + total.toFixed(2);
+        }
+        async function submitPromotion() {
+            const id = document.getElementById('promoProductId').value;
+            const days = document.getElementById('promoDays').value;
+            const method = document.getElementById('payToken').checked ? 'FREE_COIN' : 'USD';
+            const res = await fetch('/promote-product', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ product_id: id, days: days, payment_method: method })
+            });
+            if (res.ok) { alert("Promoted!"); location.reload(); }
+        }
+    </script>
+</body>
+</html>

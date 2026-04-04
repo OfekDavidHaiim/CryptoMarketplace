@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - CryptoMarket</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { background-color: #f0f2f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; font-family: system-ui, -apple-system, sans-serif; }
+        .auth-card { width: 100%; max-width: 480px; padding: 35px; background: white; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.08); }
+
+        .social-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 25px; }
+
+        .btn-social { display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 600; padding: 10px; border-radius: 10px; border: 1px solid #e0e0e0; background: white; color: #333; transition: all 0.2s ease; cursor: pointer; text-decoration: none; font-size: 0.9rem; }
+        .btn-social:hover { background: #f8f9fa; transform: translateY(-2px); box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-color: #d0d0d0; }
+
+        .fa-facebook { color: #1877F2; }
+        .fa-instagram { color: #E4405F; }
+        .fa-microsoft { color: #00A4EF; }
+        .fa-github { color: #333; }
+        .fa-discord { color: #5865F2; }
+        .fa-reddit { color: #FF4500; }
+        .fa-x-twitter { color: #000; }
+
+        .divider { display: flex; align-items: center; text-align: center; margin: 20px 0; color: #6c757d; font-size: 0.9rem; font-weight: 500; }
+        .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid #e0e0e0; }
+        .divider:not(:empty)::before { margin-right: .5em; }
+        .divider:not(:empty)::after { margin-left: .5em; }
+
+        .form-control { border-radius: 10px; padding: 12px 15px; background-color: #f8f9fa; border: 1px solid #e0e0e0; }
+        .form-control:focus { background-color: #fff; box-shadow: 0 0 0 3px rgba(13,110,253,0.1); border-color: #0d6efd; }
+        .btn-main { border-radius: 10px; padding: 12px; font-weight: bold; font-size: 1rem; }
+
+        .g_id_signin { display: flex; justify-content: center; }
+        .g_id_signin > div { width: 100% !important; border-radius: 10px !important; overflow: hidden; }
+    </style>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+    <div class="auth-card">
+        <div class="text-center mb-4">
+            <h3 class="fw-bold">Welcome Back</h3>
+            <p class="text-muted small">Sign in to your Crypto Marketplace account</p>
+        </div>
+
+        <div id="g_id_onload"
+             data-client_id="716094634129-is5abmoghh7aogil36vh8krnvjdeult7.apps.googleusercontent.com"
+             data-context="signin"
+             data-ux_mode="popup"
+             data-callback="handleGoogleLogin"
+             data-auto_prompt="false">
+        </div>
+
+        <div class="social-grid">
+            <div class="g_id_signin"
+                 data-type="standard"
+                 data-shape="rectangular"
+                 data-theme="outline"
+                 data-text="signin_with"
+                 data-size="large"
+                 data-logo_alignment="left">
+            </div>
+
+            <button class="btn-social" onclick="mockSocialAuth('Facebook')"><i class="fab fa-facebook fs-5"></i> Facebook</button>
+            <button class="btn-social" onclick="mockSocialAuth('Instagram')"><i class="fab fa-instagram fs-5"></i> Instagram</button>
+            <button class="btn-social" onclick="mockSocialAuth('Microsoft')"><i class="fab fa-microsoft fs-5"></i> Microsoft</button>
+            <button class="btn-social" onclick="mockSocialAuth('GitHub')"><i class="fab fa-github fs-5"></i> GitHub</button>
+            <button class="btn-social" onclick="mockSocialAuth('Discord')"><i class="fab fa-discord fs-5"></i> Discord</button>
+            <button class="btn-social" onclick="mockSocialAuth('Reddit')"><i class="fab fa-reddit fs-5"></i> Reddit</button>
+            <button class="btn-social" onclick="mockSocialAuth('X (Twitter)')"><i class="fab fa-x-twitter fs-5"></i> X</button>
+        </div>
+
+        <div class="divider">OR CONTINUE WITH EMAIL</div>
+
+        <ul class="nav nav-pills nav-justified mb-4" id="authTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active fw-bold rounded-pill" id="login-tab" data-bs-toggle="pill" data-bs-target="#login" type="button">Login</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link fw-bold rounded-pill" id="register-tab" data-bs-toggle="pill" data-bs-target="#register" type="button">Register</button>
+            </li>
+        </ul>
+
+        <div class="tab-content">
+            <div class="tab-pane fade show active" id="login">
+                <form id="loginForm">
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="loginUser" placeholder="Username" required>
+                    </div>
+                    <div class="mb-4">
+                        <input type="password" class="form-control" id="loginPass" placeholder="Password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-main w-100">Login to Account</button>
+                </form>
+            </div>
+
+            <div class="tab-pane fade" id="register">
+                <form id="registerForm">
+                    <div class="mb-3">
+                        <input type="text" class="form-control" id="regUser" placeholder="Choose Username" required>
+                    </div>
+                    <div class="mb-3">
+                        <input type="email" class="form-control" id="regEmail" placeholder="Email Address">
+                    </div>
+                    <div class="mb-4">
+                        <input type="password" class="form-control" id="regPass" placeholder="Password" required>
+                    </div>
+                    <button type="submit" class="btn btn-success btn-main w-100">Create Account</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        async function handleGoogleLogin(response) {
+            try {
+                const res = await fetch('/google-login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ credential: response.credential })
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    window.location.href = '/';
+                } else {
+                    alert(data.error || "Google login failed");
+                }
+            } catch (error) {
+                console.error("Error logging in with Google", error);
+            }
+        }
+
+        function mockSocialAuth(provider) {
+            alert(`Connecting with ${provider}...\n\n(Developer Note: Waiting for API keys from ${provider} Developer Console to complete backend integration)`);
+        }
+
+        document.getElementById('registerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const submitBtn = e.target.querySelector('button[type="submit"]');
+            submitBtn.disabled = true;
+            const originalText = submitBtn.innerText;
+            submitBtn.innerText = "Processing...";
+
+            const username = document.getElementById('regUser').value;
+            const password = document.getElementById('regPass').value;
+            const email = document.getElementById('regEmail').value;
+
+            try {
+                const res = await fetch('/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ username, password, email })
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    window.location.href = `/verify-page?user=${username}`;
+                } else {
+                    alert(data.error || "Error registering");
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = originalText;
+                }
+            } catch (error) {
+                console.error(error);
+                alert("Network error");
+                submitBtn.disabled = false;
+                submitBtn.innerText = originalText;
+            }
+        });
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('loginUser').value;
+            const password = document.getElementById('loginPass').value;
+
+            const res = await fetch('/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ username, password })
+            });
+
+            const data = await res.json();
+
+            if (res.ok) {
+                window.location.href = '/';
+            } else {
+                if (data.need_verify) {
+                    alert("Account not verified! Redirecting...");
+                    window.location.href = `/verify-page?user=${username}`;
+                } else {
+                    alert(data.error || "Wrong username or password");
+                }
+            }
+        });
+    </script>
+</body>
+</html>

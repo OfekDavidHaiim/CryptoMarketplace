@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ product.title }} - Details</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f0f2f5; }
+        .product-container { max-width: 1100px; margin: 30px auto; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }
+
+        .image-section {
+            background-color: #000;
+            height: 550px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        #productCarousel, .carousel-inner, .carousel-item {
+            height: 100%;
+            width: 100%;
+        }
+        .carousel-item img {
+            height: 100%;
+            width: 100%;
+            object-fit: contain;
+            margin: auto;
+        }
+
+        .details-section { padding: 30px; }
+        .price-main { font-size: 2rem; font-weight: bold; }
+
+        .seller-badge { display: flex; align-items: center; margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 10px; transition: 0.2s; }
+        .seller-badge:hover { background-color: #e9ecef; cursor: pointer; }
+
+        .seller-avatar { width: 50px; height: 50px; border-radius: 50%; object-fit: cover; margin-right: 15px; background: #ddd; }
+        .chat-btn { width: 100%; padding: 10px; font-weight: bold; font-size: 1.1rem; }
+
+        .text-decoration-none { text-decoration: none !important; }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-3 sticky-top shadow-sm">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="/">
+                🛒 CRYPTO <span class="text-warning">MARKETPLACE</span>
+            </a>
+
+            <form action="/" method="get" class="d-flex mx-auto position-relative" style="width: 40%;">
+                <input class="form-control rounded-pill px-4" type="search" name="q" placeholder="Search items..." required>
+            </form>
+
+            <div class="d-flex align-items-center">
+                {% if user %}
+                    <div class="me-3 text-white d-none d-md-block" style="background: rgba(255,255,255,0.1); padding: 5px 15px; border-radius: 20px;">
+                        <span class="text-warning fw-bold" id="userBalance">Loading...</span> FREE
+                    </div>
+
+                    <a href="/inbox" class="btn btn-outline-light btn-sm me-2 rounded-pill position-relative">
+                        📩 Inbox
+                        <span id="msgBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display: none;">0</span>
+                    </a>
+
+                    <a href="/my-profile" class="text-white me-3 text-decoration-none fw-bold">
+                        {{ user }} 👤
+                    </a>
+                    <a href="/logout" class="btn btn-danger btn-sm rounded-pill">Logout</a>
+                {% else %}
+                    <a href="/login-page" class="btn btn-warning fw-bold rounded-pill">Login / Register</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="product-container">
+            <div class="row g-0">
+                <div class="col-md-7 image-section">
+                    <div id="productCarousel" class="carousel slide" data-bs-ride="carousel">
+                        <div class="carousel-inner">
+                            {% if product.images and product.images|length > 0 %}
+                                {% for img in product.images %}
+                                    <div class="carousel-item {{ 'active' if loop.index0 == 0 }}">
+                                        <img src="{{ img }}" class="d-block">
+                                    </div>
+                                {% endfor %}
+                            {% elif product.image %}
+                                <div class="carousel-item active">
+                                    <img src="{{ product.image }}" class="d-block">
+                                </div>
+                            {% else %}
+                                <div class="carousel-item active">
+                                    <img src="https://via.placeholder.com/600x600?text=No+Image" class="d-block">
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        {% if product.images and product.images|length > 1 %}
+                            <button class="carousel-control-prev" type="button" data-bs-target="#productCarousel" data-bs-slide="prev">
+                                <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+                            </button>
+                            <button class="carousel-control-next" type="button" data-bs-target="#productCarousel" data-bs-slide="next">
+                                <span class="carousel-control-next-icon" aria-hidden="true"></span>
+                            </button>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="col-md-5 details-section">
+                    <h2 class="mb-1">{{ product.title }}</h2>
+
+                    <div class="mb-3 d-flex align-items-baseline gap-2">
+                        <div class="price-main mb-0">{{ product.price }} {{ product.currency }}</div>
+                        {% if product.currency != 'USDT' %}
+                            <span class="text-muted fs-5" id="conversionContainer" style="display: none;">
+                              ≈ <span id="convertedPrice" class="text-success fw-bold">--</span> USDT
+                            </span>
+                        {% endif %}
+                    </div>
+
+                    <p class="text-muted">Listed on {{ product.created_at.strftime('%d/%m/%Y') }}</p>
+
+                    <div class="mb-4">
+                        <h5>Description</h5>
+                        <p>{{ product.description }}</p>
+                    </div>
+
+                    <div class="mb-4">
+                         <h5>Details</h5>
+                         <ul class="list-unstyled">
+                             <li><strong>Category:</strong> {{ product.category }}</li>
+                             <li><strong>Status:</strong>
+                                 <span class="badge {{ 'bg-success' if product.status=='available' else 'bg-danger' }}">
+                                     {{ product.status | upper }}
+                                 </span>
+                             </li>
+                         </ul>
+                    </div>
+
+                    {% if user %}
+                    <button id="favActionBtn" class="btn {% if is_favorite %}btn-danger{% else %}btn-outline-danger{% endif %} fw-bold rounded-pill px-4 mb-4 w-100" onclick="toggleFavoriteAction('{{ product._id }}')">
+                        {% if is_favorite %}
+                            💔 REMOVE FROM FAVORITES
+                        {% else %}
+                            ❤️ ADD TO FAVORITES
+                        {% endif %}
+                    </button>
+                    {% endif %}
+
+                    <hr>
+
+                    <a href="/user/{{ seller.username }}" class="text-decoration-none text-dark">
+                        <div class="seller-badge">
+                            {% if seller.avatar %}
+                                <img src="{{ seller.avatar if 'http' in seller.avatar else '/static/uploads/' + seller.avatar }}" class="seller-avatar">
+                            {% else %}
+                                <div class="seller-avatar d-flex align-items-center justify-content-center fw-bold text-white bg-secondary">
+                                    {{ seller.username[0] | upper }}
+                                </div>
+                            {% endif %}
+
+                            <div>
+                                <h6 class="mb-0">{{ seller.username }}</h6>
+                                <small class="text-muted">Joined {{ seller.joined }} • ⭐ {{ seller.rating }} Rating</small>
+                                <br>
+                                <small class="text-primary" style="font-size: 0.8rem;">Click to view profile</small>
+                            </div>
+                        </div>
+                    </a>
+
+                    <div class="mt-4">
+                        {% if user and user != seller.username %}
+                            <div class="input-group mb-2">
+                                <input type="text" class="form-control" id="quickMsg" value="Hi, is this still available?">
+                                <button class="btn btn-primary" onclick="startChat()">Send</button>
+                            </div>
+                            <button class="btn btn-outline-primary chat-btn" onclick="startChat()">💬 Chat with Seller</button>
+                        {% elif user == seller.username %}
+                            <div class="alert alert-warning text-center">This is your listing</div>
+                        {% else %}
+                            <a href="/login-page" class="btn btn-primary w-100">Login to Buy</a>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        async function startChat() {
+            const msg = document.getElementById('quickMsg') ? document.getElementById('quickMsg').value : '';
+            try {
+                const res = await fetch('/start-chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        seller_id: "{{ product.seller_id }}",
+                        seller_name: "{{ seller.username }}",
+                        product_title: "{{ product.title }}"
+                    })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    if (msg) {
+                        await fetch('/send-message', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ chat_id: data.chat_id, content: msg })
+                        });
+                    }
+                    window.location.href = `/chat-page/${data.chat_id}`;
+                } else { alert(data.error); }
+            } catch (err) { alert("Please login first."); }
+        }
+
+        const ethRate = parseFloat("{{ current_eth_rate or 0 }}");
+        const productPrice = parseFloat("{{ product.price }}");
+        const productCurrency = "{{ product.currency }}";
+
+        async function fetchAndConvertPrice() {
+            const conversionContainer = document.getElementById('conversionContainer');
+            const convertedPriceEl = document.getElementById('convertedPrice');
+
+            if (!conversionContainer || !convertedPriceEl || productCurrency === 'USDT') return;
+
+            try {
+                const response = await fetch(`https://api.coinbase.com/v2/exchange-rates?currency=${productCurrency}`);
+                const data = await response.json();
+
+                if (data && data.data && data.data.rates && data.data.rates.USD) {
+                    const rate = parseFloat(data.data.rates.USD);
+                    const usdValue = (productPrice * rate).toFixed(2);
+                    convertedPriceEl.innerText = `$${usdValue}`;
+                    conversionContainer.style.display = 'inline-block';
+                }
+            } catch (error) {
+                console.error("Conversion error:", error);
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", fetchAndConvertPrice);
+
+        async function toggleFavoriteAction(productId) {
+            try {
+                const res = await fetch(`/toggle-favorite/${productId}`, { method: 'POST' });
+                if (res.status === 401) {
+                    alert("Please login first");
+                    return;
+                }
+                const data = await res.json();
+                const btn = document.getElementById('favActionBtn');
+
+                if (data.status === 'added') {
+                    btn.className = "btn btn-danger fw-bold rounded-pill px-4 mb-4 w-100";
+                    btn.innerHTML = "💔 REMOVE FROM FAVORITES";
+                } else {
+                    btn.className = "btn btn-outline-danger fw-bold rounded-pill px-4 mb-4 w-100";
+                    btn.innerHTML = "❤️ ADD TO FAVORITES";
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    </script>
+</body>
+</html>
