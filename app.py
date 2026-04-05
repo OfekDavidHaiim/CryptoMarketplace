@@ -15,6 +15,17 @@ import cloudinary.api
 import math
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
+import requests
+from concurrent.futures import ThreadPoolExecutor
+from PIL import Image, ImageOps
+import io
+
+GITHUB_CLIENT_ID = 'Ov23liVkvOCL4Wr5JCVg'
+GITHUB_CLIENT_SECRET = '81d0508b3dd05a03ea6b94f688059243385d69d1'
+
+DISCORD_CLIENT_ID = '1490490277519954021'
+DISCORD_CLIENT_SECRET = 'MLmGelVhI2nmdo6WMyED32MYGHegyujZ'
+DISCORD_REDIRECT_URI = 'http://localhost:5000/discord-callback'
 
 
 app = Flask(__name__)
@@ -482,25 +493,78 @@ def get_products():
 
     return jsonify(products_list)
 
+
 @app.route('/add-product', methods=['POST'])
 def add_product():
-    if 'username' not in session: return jsonify({"error": "Unauthorized"}), 401
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
 
     image_urls = []
-    country = request.form.get('country', 'Global')
-    lat = request.form.get('lat', type=float)
-    lng = request.form.get('lng', type=float)
 
     if 'images' in request.files:
         files = request.files.getlist('images')
+        file_data_list = []
+
         for file in files:
             if file and file.filename != '':
-                try:
-                    upload_result = cloudinary.uploader.upload(file)
-                    image_urls.append(upload_result['secure_url'])
-                except Exception as e:
-                    print(f"Error uploading to Cloudinary: {e}")
-                    return jsonify({"error": "Image upload failed"}), 500
+                file.seek(0)
+                file_data_list.append((file.filename, file.read(), file.content_type))
+
+        def upload_worker(file_info):
+            fname, fdata, ftype = file_info
+            try:
+                img = Image.open(io.BytesIO(fdata))
+
+                if img.mode in ("RGBA", "P"):
+                    img = img.convert("RGB")
+
+                target_size = (800, 800)
+                img = ImageOps.fit(img, target_size, Image.Resampling.LANCZOS)
+
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format='JPEG', quality=85)
+                img_byte_arr.seek(0)
+
+                files_payload = {'fileToUpload': (fname, img_byte_arr.read(), 'image/jpeg')}
+                data_payload = {'reqtype': 'fileupload'}
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+
+                res = requests.post('https://catbox.moe/user/api.php', files=files_payload, data=data_payload, headers=headers)
+
+                if res.status_code == 200 and res.text.startswith('http'):
+                    return res.text.strip()
+            except Exception as e:
+                print(f"Image processing or upload error: {e}")
+            return None
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            results = executor.map(upload_worker, file_data_list)
+            for res in results:
+                if res:
+                    image_urls.append(res)
+
+    lat = request.form.get('lat', type=float)
+    lng = request.form.get('lng', type=float)
+
+    country = 'Global'
+    if lat is not None and lng is not None:
+        try:
+            geo_url = f"https://api.bigdatacloud.net/data/reverse-geocode-client?latitude={lat}&longitude={lng}&localityLanguage=en"
+            geo_res = requests.get(geo_url, timeout=3)
+            if geo_res.status_code == 200:
+                geo_data = geo_res.json()
+                fetched_country = geo_data.get('countryName')
+                if fetched_country:
+                    if fetched_country == "United States of America":
+                        country = "USA"
+                    elif fetched_country == "United Kingdom":
+                        country = "UK"
+                    else:
+                        country = fetched_country
+        except Exception as e:
+            print(f"Geocoding error: {e}")
 
     new_product = {
         "title": request.form.get('title'),
@@ -519,8 +583,9 @@ def add_product():
         "status": "available",
         "is_promoted": False
     }
+
     products_col.insert_one(new_product)
-    return jsonify({"message": "Product added to Cloud!"}), 201
+    return jsonify({"message": "Product added with auto-detected country!"}), 201
 
 
 @app.route('/start-chat', methods=['POST'])
@@ -864,8 +929,142 @@ def social_auth(provider):
         "action": "Please add Client ID and Client Secret from developer console."
     }), 501
 
+@app.route('/github-login')
+def github_login():
+    github_auth_url = f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}&scope=user:email"
+    return redirect(github_auth_url)
 
 
+@app.route('/github-callback')
+def github_callback():
+    code = request.args.get('code')
+    if not code:
+        return redirect('/login-page')
+
+    token_url = 'https://github.com/login/oauth/access_token'
+    payload = {
+        'client_id': GITHUB_CLIENT_ID,
+        'client_secret': GITHUB_CLIENT_SECRET,
+        'code': code
+    }
+    headers = {'Accept': 'application/json'}
+
+    res = requests.post(token_url, data=payload, headers=headers)
+    token_data = res.json()
+    access_token = token_data.get('access_token')
+
+    if not access_token:
+        return redirect('/login-page')
+
+    user_url = 'https://api.github.com/user'
+    user_headers = {'Authorization': f'Bearer {access_token}'}
+    user_res = requests.get(user_url, headers=user_headers)
+    github_user = user_res.json()
+
+    emails_res = requests.get(f'{user_url}/emails', headers=user_headers)
+    emails_data = emails_res.json()
+    primary_email = next((e['email'] for e in emails_data if e.get('primary')), '')
+
+    github_id = str(github_user.get('id'))
+    name = github_user.get('name') or github_user.get('login')
+    avatar = github_user.get('avatar_url', '')
+
+    user = users_col.find_one({"$or": [{"email": primary_email}, {"github_id": github_id}]}) if primary_email else users_col.find_one({"github_id": github_id})
+
+    if not user:
+        new_user = {
+            "username": name,
+            "email": primary_email,
+            "password": "",
+            "created_at": datetime.now(),
+            "is_verified": True,
+            "verification_code": "",
+            "avatar": avatar,
+            "avg_rating": 0,
+            "reviews": [],
+            "wallet_balance": 100,
+            "github_id": github_id
+        }
+        result = users_col.insert_one(new_user)
+        session['username'] = new_user['username']
+        session['user_id'] = str(result.inserted_id)
+    else:
+        if not user.get('github_id'):
+            users_col.update_one({"_id": user['_id']}, {"$set": {"github_id": github_id, "avatar": avatar if not user.get('avatar') else user['avatar']}})
+        session['username'] = user['username']
+        session['user_id'] = str(user['_id'])
+
+    return redirect('/')
+
+@app.route('/discord-login')
+def discord_login():
+    discord_auth_url = f"https://discord.com/api/oauth2/authorize?client_id={DISCORD_CLIENT_ID}&redirect_uri={DISCORD_REDIRECT_URI}&response_type=code&scope=identify%20email"
+    return redirect(discord_auth_url)
+
+
+@app.route('/discord-callback')
+def discord_callback():
+    code = request.args.get('code')
+    if not code:
+        return redirect('/login-page')
+
+    token_url = 'https://discord.com/api/oauth2/token'
+    data = {
+        'client_id': DISCORD_CLIENT_ID,
+        'client_secret': DISCORD_CLIENT_SECRET,
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': DISCORD_REDIRECT_URI
+    }
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+
+    res = requests.post(token_url, data=data, headers=headers)
+    token_data = res.json()
+    access_token = token_data.get('access_token')
+
+    if not access_token:
+        return redirect('/login-page')
+
+    user_url = 'https://discord.com/api/users/@me'
+    user_headers = {'Authorization': f'Bearer {access_token}'}
+    user_res = requests.get(user_url, headers=user_headers)
+    discord_user = user_res.json()
+
+    discord_id = str(discord_user.get('id'))
+    name = discord_user.get('username')
+    email = discord_user.get('email', '')
+    avatar_hash = discord_user.get('avatar')
+
+    avatar_url = ''
+    if avatar_hash:
+        avatar_url = f"https://cdn.discordapp.com/avatars/{discord_id}/{avatar_hash}.png"
+
+    user = users_col.find_one({"$or": [{"email": email}, {"discord_id": discord_id}]}) if email else users_col.find_one({"discord_id": discord_id})
+
+    if not user:
+        new_user = {
+            "username": name,
+            "email": email,
+            "password": "",
+            "created_at": datetime.now(),
+            "is_verified": True,
+            "verification_code": "",
+            "avatar": avatar_url,
+            "avg_rating": 0,
+            "reviews": [],
+            "wallet_balance": 100,
+            "discord_id": discord_id
+        }
+        result = users_col.insert_one(new_user)
+        session['username'] = new_user['username']
+        session['user_id'] = str(result.inserted_id)
+    else:
+        if not user.get('discord_id'):
+            users_col.update_one({"_id": user['_id']}, {"$set": {"discord_id": discord_id, "avatar": avatar_url if not user.get('avatar') else user['avatar']}})
+        session['username'] = user['username']
+        session['user_id'] = str(user['_id'])
+
+    return redirect('/')
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
