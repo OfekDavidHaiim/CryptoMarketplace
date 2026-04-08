@@ -208,17 +208,28 @@
 
                     <div class="mt-4">
                         {% if user and user != seller.username %}
-                            <div class="input-group mb-2">
-                                <input type="text" class="form-control" id="quickMsg" value="Hi, is this still available?">
-                                <button class="btn btn-primary" onclick="startChat()">Send</button>
-                            </div>
-                            <button class="btn btn-outline-primary chat-btn" onclick="startChat()">💬 Chat with Seller</button>
+                            {% if product.listing_type == 'escrow' %}
+                                <div class="alert alert-info text-center small mb-3">
+                                    🔒 <strong>Secure Escrow:</strong> Funds are held safely until delivery is confirmed.
+                                </div>
+                                <button class="btn btn-success w-100 py-3 fw-bold fs-5 mb-2 shadow-sm" onclick="checkoutEscrow('{{ product._id }}', {{ product.price }})">
+                                    🛍️ BUY NOW ({{ product.price }} {{ product.currency }})
+                                </button>
+                                <button class="btn btn-outline-secondary w-100 fw-bold" onclick="startChat()">💬 Ask a Question</button>
+                            {% else %}
+                                <div class="input-group mb-2">
+                                    <input type="text" class="form-control" id="quickMsg" value="Hi, is this still available?">
+                                    <button class="btn btn-primary" onclick="startChat()">Send</button>
+                                </div>
+                                <button class="btn btn-outline-primary chat-btn" onclick="startChat()">💬 Chat with Seller</button>
+                            {% endif %}
                         {% elif user == seller.username %}
-                            <div class="alert alert-warning text-center">This is your listing</div>
+                            <div class="alert alert-warning text-center fw-bold">This is your listing</div>
                         {% else %}
-                            <a href="/login-page" class="btn btn-primary w-100">Login to Buy</a>
+                            <a href="/login-page" class="btn btn-primary w-100 py-2 fw-bold">Login to Buy or Chat</a>
                         {% endif %}
                     </div>
+
                 </div>
             </div>
         </div>
@@ -333,6 +344,30 @@
                 console.error(e);
             }
         }
+        async function checkoutEscrow(productId, price) {
+            if (!confirm(`You are about to secure this item. Proceed to payment details?`)) return;
+
+            try {
+                const res = await fetch('/request-escrow-payment', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ product_id: productId })
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    window.location.href = '/orders';
+                } else {
+                    alert(data.error || "Checkout failed.");
+                }
+            } catch (err) {
+                alert("Network error. Please try again.");
+            }
+        }
+
+
+
+
     </script>
 </body>
 </html>

@@ -102,6 +102,7 @@
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2" aria-labelledby="userMenu" style="border-radius: 12px; min-width: 220px;">
                             <li><a class="dropdown-item py-2 fw-bold" href="/my-profile">👤 My Profile</a></li>
+                            <li><a class="dropdown-item py-2 fw-bold" href="/orders">📦 Escrow Dashboard</a></li>
                             <li><button class="dropdown-item py-2 fw-bold" onclick="showFavorites()">❤️ My Favorites</button></li>
                             <li id="verifyBtnItem"><button class="dropdown-item py-2 text-info fw-bold" onclick="buyBlueBadge()">☑️ Get Verified (50 Coins)</button></li>
                             <li><hr class="dropdown-divider"></li>
@@ -221,6 +222,25 @@
                                 </select>
                             </div>
                         </div>
+
+                        <div class="mb-3 p-3 bg-light border rounded">
+                            <label class="form-label fw-bold">Listing Type</label>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="radio" name="listing_type" id="typeRegular" value="regular" checked>
+                                <label class="form-check-label" for="typeRegular">
+                                    <strong>Regular Marketplace</strong> <br>
+                                    <small class="text-muted">Chat with buyers, arrange payment and delivery privately.</small>
+                                </label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="listing_type" id="typeEscrow" value="escrow">
+                                <label class="form-check-label" for="typeEscrow">
+                                    <strong>Secure Escrow (Buy Now)</strong> <br>
+                                    <small class="text-muted">Platform holds funds. You must ship via FedEx/DHL/UPS with Signature Confirmation. 1% Fee.</small>
+                                </label>
+                            </div>
+                        </div>
+
                         <div class="mb-3">
                             <label class="form-label">Images</label>
                             <input type="file" class="form-control" name="images" accept="image/*" multiple required>
@@ -433,12 +453,22 @@
                         body: formData
                     });
 
+                    const data = await response.json();
+
                     if (response.ok) {
                         bootstrap.Modal.getInstance(document.getElementById('addProductModal')).hide();
                         addForm.reset();
                         loadProducts();
+                        alert("Product added successfully!");
                     } else {
-                        alert("Error saving product.");
+                        if (data.error === "wallet_missing") {
+                            bootstrap.Modal.getInstance(document.getElementById('addProductModal')).hide();
+                            if (confirm(data.message + "\n\nWould you like to go to your profile now to set it up?")) {
+                                window.location.href = '/my-profile';
+                            }
+                        } else {
+                            alert(data.error || data.message || "Error saving product.");
+                        }
                     }
                 } catch (error) {
                     console.error("Submission Error:", error);

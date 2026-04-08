@@ -19,6 +19,11 @@ import requests
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image, ImageOps
 import io
+from flask_apscheduler import APScheduler
+from datetime import datetime, timedelta
+import uuid
+
+scheduler = APScheduler()
 
 GITHUB_CLIENT_ID = 'Ov23liVkvOCL4Wr5JCVg'
 GITHUB_CLIENT_SECRET = '81d0508b3dd05a03ea6b94f688059243385d69d1'
@@ -61,6 +66,17 @@ try:
     users_col.create_index("email", unique=True)
 except Exception as e:
     print(f"Index creation warning (ignore if duplicates exist): {e}")
+
+orders_col = db["orders"]
+
+PLATFORM_WALLETS = {
+    "BTC": {"address": "17e1JLisfjAp2UAVzYnBfwtwSgCo4MpTTk", "network": "BTC"},
+    "ETH": {"address": "0x983dcbbabe416683e78c1352b344621a139c1b07", "network": "ERC20"},
+    "SOL": {"address": "4fFLBwHauEU2cMdzuaqgRAzcGoKPU75ZpAdWx9CeFWQc", "network": "Solana"},
+    "USDT": {"address": "TT9F9As3Lj1sUptcLmWGd8vSaeBqCdPqyV", "network": "TRC20"}
+}
+FEE_PERCENT = 0.01
+TRACKING_DEADLINE_DAYS = 3
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     try:
@@ -499,6 +515,20 @@ def add_product():
     if 'username' not in session:
         return jsonify({"error": "Unauthorized"}), 401
 
+    user = users_col.find_one({"_id": ObjectId(session['user_id'])})
+    listing_type = request.form.get('listing_type', 'regular')
+    product_currency = request.form.get('currency', 'BTC')
+
+    if listing_type == 'escrow':
+        user_wallets = user.get('payout_wallets', [])
+        has_matching_wallet = any(w.get('currency') == product_currency for w in user_wallets)
+
+        if not has_matching_wallet:
+            return jsonify({
+                "error": "wallet_missing",
+                "message": f"You must configure a {product_currency} payout wallet in your profile before creating a Secure Escrow listing for this currency."
+            }), 400
+
     image_urls = []
 
     if 'images' in request.files:
@@ -569,6 +599,7 @@ def add_product():
     new_product = {
         "title": request.form.get('title'),
         "description": request.form.get('description'),
+        "listing_type": request.form.get('listing_type', 'regular'),
         "price": float(request.form.get('price')),
         "currency": request.form.get('currency'),
         "category": request.form.get('category'),
@@ -1065,6 +1096,323 @@ def discord_callback():
         session['user_id'] = str(user['_id'])
 
     return redirect('/')
+@app.route('/checkout', methods=['POST'])
+def checkout():
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json
+    product_id = data.get('product_id')
+    buyer_id = session['user_id']
+
+    product = products_col.find_one({"_id": ObjectId(product_id), "status": "available"})
+    if not product:
+        return jsonify({"error": "Product is no longer available"}), 400
+
+    if str(product['seller_id']) == buyer_id:
+        return jsonify({"error": "You cannot buy your own product"}), 400
+
+    buyer = users_col.find_one({"_id": ObjectId(buyer_id)})
+    price = product['price']
+
+    if buyer.get('wallet_balance', 0) < price:
+        return jsonify({"error": "Insufficient funds in your wallet"}), 400
+
+    fee = price * FEE_PERCENT
+    seller_receives = price - fee
+
+    users_col.update_one(
+        {"_id": ObjectId(buyer_id)},
+        {"$inc": {"wallet_balance": -price}}
+    )
+
+    new_order = {
+        "product_id": product_id,
+        "product_title": product['title'],
+        "buyer_id": buyer_id,
+        "seller_id": str(product['seller_id']),
+        "price": price,
+        "platform_fee": fee,
+        "seller_receives": seller_receives,
+        "currency": product['currency'],
+        "status": "pending_tracking",
+        "tracking_number": "",
+        "created_at": datetime.now(),
+        "tracking_deadline": datetime.now() + timedelta(days=TRACKING_DEADLINE_DAYS)
+    }
+    orders_col.insert_one(new_order)
+
+    products_col.update_one(
+        {"_id": ObjectId(product_id)},
+        {"$set": {"status": "escrow"}}
+    )
+
+    return jsonify({"message": "Payment secured in Escrow. Waiting for seller to ship!"}), 200
+
+
+@app.route('/add-tracking', methods=['POST'])
+def add_tracking():
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json
+    order_id = data.get('order_id')
+    tracking_num = data.get('tracking_number')
+
+    order = orders_col.find_one(
+        {"_id": ObjectId(order_id), "seller_id": session['user_id'], "status": "pending_tracking"})
+    if not order:
+        return jsonify({"error": "Order not found or tracking already provided"}), 404
+
+    orders_col.update_one(
+        {"_id": ObjectId(order_id)},
+        {"$set": {"tracking_number": tracking_num, "status": "shipped"}}
+    )
+    return jsonify({"message": "Tracking added! Buyer has been notified."}), 200
+
+
+@app.route('/confirm-delivery', methods=['POST'])
+def confirm_delivery():
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json
+    order_id = data.get('order_id')
+
+    order = orders_col.find_one({"_id": ObjectId(order_id), "buyer_id": session['user_id'], "status": "shipped"})
+    if not order:
+        return jsonify({"error": "Order not found or not in shipped status"}), 404
+
+    users_col.update_one(
+        {"_id": ObjectId(order['seller_id'])},
+        {"$inc": {"wallet_balance": order['seller_receives']}}
+    )
+
+    orders_col.update_one(
+        {"_id": ObjectId(order_id)},
+        {"$set": {"status": "completed", "completed_at": datetime.now()}}
+    )
+
+    products_col.update_one(
+        {"_id": ObjectId(order['product_id'])},
+        {"$set": {"status": "sold", "buyer_id": session['user_id']}}
+    )
+
+    return jsonify({"message": "Delivery confirmed. Funds released to seller!"}), 200
+
+
+@app.route('/check-expired-escrow', methods=['POST'])
+def check_expired_escrow():
+    expired_orders = orders_col.find({
+        "status": "pending_tracking",
+        "tracking_deadline": {"$lt": datetime.now()}
+    })
+
+    refund_count = 0
+    for order in expired_orders:
+        users_col.update_one(
+            {"_id": ObjectId(order['buyer_id'])},
+            {"$inc": {"wallet_balance": order['price']}}
+        )
+
+        orders_col.update_one(
+            {"_id": order['_id']},
+            {"$set": {"status": "refunded", "refunded_at": datetime.now()}}
+        )
+
+        products_col.update_one(
+            {"_id": ObjectId(order['product_id'])},
+            {"$set": {"status": "available"}}
+        )
+        refund_count += 1
+
+    return jsonify({"message": f"{refund_count} orders auto-refunded to buyers due to shipping timeout."}), 200
+
+
+@app.route('/orders')
+def orders_dashboard():
+    if 'username' not in session:
+        return redirect('/login-page')
+
+    user_id = session['user_id']
+
+    bought_orders = list(orders_col.find({"buyer_id": user_id}).sort("created_at", -1))
+    sold_orders = list(orders_col.find({"seller_id": user_id}).sort("created_at", -1))
+
+    for order in bought_orders + sold_orders:
+        order['_id'] = str(order['_id'])
+        order['created_at_str'] = order['created_at'].strftime("%Y-%m-%d %H:%M")
+        if 'expires_at' in order:
+            order['expires_at_iso'] = order['expires_at'].isoformat()
+        if 'paid_at' in order:
+            order['shipping_deadline_iso'] = (order['paid_at'] + timedelta(days=3)).isoformat()
+
+    return render_template('orders.html', bought=bought_orders, sold=sold_orders, user=session['username'])
+
+
+@app.route('/api/order-status/<order_id>')
+def order_status_api(order_id):
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    order = orders_col.find_one({"_id": ObjectId(order_id)})
+    if not order:
+        return jsonify({"error": "Not found"}), 404
+
+    return jsonify({"status": order.get('status')})
+
+
+@app.route('/request-escrow-payment', methods=['POST'])
+@app.route('/request-escrow-payment', methods=['POST'])
+def request_escrow_payment():
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json
+    product_id = data.get('product_id')
+    product = products_col.find_one({"_id": ObjectId(product_id)})
+
+    product_currency = product.get('currency', 'BTC')
+    platform_wallet_info = PLATFORM_WALLETS.get(product_currency)
+
+    if not platform_wallet_info:
+        return jsonify({"error": f"Platform wallet for {product_currency} is not configured."}), 400
+
+    platform_address = platform_wallet_info['address']
+    platform_network = platform_wallet_info['network']
+
+    seller = users_col.find_one({"_id": ObjectId(product['seller_id'])})
+    seller_wallets = seller.get('payout_wallets', [])
+
+    matching_wallet = next((w for w in seller_wallets if w.get('currency') == product_currency), None)
+
+    if not matching_wallet:
+        return jsonify({"error": "Seller no longer has a matching payout wallet for this currency."}), 400
+
+    expires_at = datetime.now() + timedelta(minutes=30)
+
+    new_order = {
+        "product_id": product_id,
+        "product_title": product['title'],
+        "buyer_id": session['user_id'],
+        "seller_id": str(product['seller_id']),
+        "seller_wallet": matching_wallet['address'],
+        "seller_network": matching_wallet['network'],
+        "price": product['price'],
+        "currency": product_currency,
+        "status": "awaiting_payment",
+        "payment_address": platform_address,
+        "payment_network": platform_network,
+        "expires_at": expires_at,
+        "created_at": datetime.now()
+    }
+
+    order_id = orders_col.insert_one(new_order).inserted_id
+
+    products_col.update_one(
+        {"_id": ObjectId(product_id)},
+        {"$set": {"status": "hold"}}
+    )
+
+    return jsonify({
+        "order_id": str(order_id),
+        "payment_address": platform_address,
+        "payment_network": platform_network,
+        "currency": product_currency,
+        "expires_in_minutes": 30
+    }), 200
+
+
+# Automated Background Task (Runs every 1 minute)
+@scheduler.task('interval', id='monitor_orders', minutes=1)
+def monitor_orders():
+    with app.app_context():
+        pending_payments = orders_col.find({"status": "awaiting_payment"})
+        for order in pending_payments:
+            if datetime.now() > order['expires_at']:
+                orders_col.update_one({"_id": order['_id']}, {"$set": {"status": "expired"}})
+
+                products_col.update_one(
+                    {"_id": ObjectId(order['product_id'])},
+                    {"$set": {"status": "available"}}
+                )
+                continue
+
+            if check_blockchain_for_payment(order['payment_address'], order['price']):
+                orders_col.update_one({"_id": order['_id']},
+                                      {"$set": {"status": "pending_tracking", "paid_at": datetime.now()}})
+
+                products_col.update_one(
+                    {"_id": ObjectId(order['product_id'])},
+                    {"$set": {"status": "sold", "buyer_id": order['buyer_id']}}
+                )
+
+        unshipped_orders = orders_col.find({
+            "status": "pending_tracking",
+            "paid_at": {"$lt": datetime.now() - timedelta(days=3)}
+        })
+
+        for order in unshipped_orders:
+            refund_amount = order['price'] * (1 - FEE_PERCENT)
+            orders_col.update_one({"_id": order['_id']},
+                                  {"$set": {"status": "refunded", "refund_amount": refund_amount}})
+
+            products_col.update_one(
+                {"_id": ObjectId(order['product_id'])},
+                {"$set": {"status": "available", "buyer_id": ""}}
+            )
+
+
+import uuid
+
+
+@app.route('/add-payout-wallet', methods=['POST'])
+def add_payout_wallet():
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json
+    currency = data.get('currency')
+    network = data.get('network')
+    address = data.get('address')
+
+    if not currency or not network or not address:
+        return jsonify({"error": "Missing wallet details"}), 400
+
+    new_wallet = {
+        "id": str(uuid.uuid4()),
+        "currency": currency,
+        "network": network,
+        "address": address,
+        "added_at": datetime.now()
+    }
+
+    users_col.update_one(
+        {"_id": ObjectId(session['user_id'])},
+        {"$push": {"payout_wallets": new_wallet}}
+    )
+
+    return jsonify({"message": "Wallet saved successfully!"}), 200
+
+
+@app.route('/delete-payout-wallet/<wallet_id>', methods=['POST'])
+def delete_payout_wallet(wallet_id):
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    users_col.update_one(
+        {"_id": ObjectId(session['user_id'])},
+        {"$pull": {"payout_wallets": {"id": wallet_id}}}
+    )
+    return jsonify({"message": "Wallet removed"}), 200
+
+def check_blockchain_for_payment(address, expected_amount):
+    # This is a placeholder for real blockchain integration
+    return False
+
+
+scheduler.init_app(app)
+scheduler.start()
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
