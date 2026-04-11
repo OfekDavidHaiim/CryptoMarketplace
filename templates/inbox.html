@@ -1,5 +1,35 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="light">
+<script>
+    // פונקציה להחלפת ערכת הנושא
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-bs-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            document.documentElement.setAttribute('data-bs-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeUI(newTheme);
+        }
+
+        // עדכון האייקון והממשק
+        function updateThemeUI(theme) {
+            const icon = document.getElementById('themeIcon');
+            if (icon) {
+                icon.innerText = theme === 'dark' ? '☀️' : '🌙';
+            }
+        }
+
+        // הרצה ראשונית כשהדף נטען
+        document.addEventListener('DOMContentLoaded', () => {
+            const currentTheme = document.documentElement.getAttribute('data-bs-theme');
+            updateThemeUI(currentTheme);
+        });
+    // בדיקה מיידית של ערכת הנושא כדי למנוע הבהוב לבן בטעינה
+    (function() {
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-bs-theme', savedTheme);
+    })();
+</script>
 <head>
     <meta charset="UTF-8">
     <title>My Inbox</title>
@@ -9,6 +39,33 @@
         .chat-item { transition: 0.2s; cursor: pointer; }
         .chat-item:hover { background-color: #e9ecef; }
         .avatar { width: 40px; height: 40px; background-color: #0d6efd; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 15px; }
+        /* --- Dark Mode Custom Overrides --- */
+        [data-bs-theme="dark"] body {
+            background-color: #121212 !important;
+            color: #e0e0e0;
+        }
+        [data-bs-theme="dark"] .card,
+        [data-bs-theme="dark"] .stat-box,
+        [data-bs-theme="dark"] .order-card,
+        [data-bs-theme="dark"] .review-card {
+            background-color: #1e1e1e !important;
+            color: #fff !important;
+            border-color: #333 !important;
+        }
+        [data-bs-theme="dark"] .list-group-item {
+            background-color: #1e1e1e;
+            color: #fff;
+            border-color: #333;
+        }
+        [data-bs-theme="dark"] .navbar {
+            border-bottom: 1px solid #333;
+        }
+        [data-bs-theme="dark"] .bg-white, [data-bs-theme="dark"] .bg-light {
+            background-color: #1e1e1e !important;
+        }
+        [data-bs-theme="dark"] .text-muted {
+            color: #aaa !important;
+        }
     </style>
 </head>
 <body>

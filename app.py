@@ -22,6 +22,12 @@ import io
 from flask_apscheduler import APScheduler
 from datetime import datetime, timedelta
 import uuid
+from markupsafe import escape
+import pyotp
+import qrcode
+import base64
+from io import BytesIO
+
 
 scheduler = APScheduler()
 
@@ -32,6 +38,8 @@ DISCORD_CLIENT_ID = '1490490277519954021'
 DISCORD_CLIENT_SECRET = 'MLmGelVhI2nmdo6WMyED32MYGHegyujZ'
 DISCORD_REDIRECT_URI = 'http://localhost:5000/discord-callback'
 
+# --- Admin Configuration ---
+ADMIN_USERNAMES = ['OfekDavidHAIIM'] # Add your exact registered username here
 
 app = Flask(__name__)
 app.secret_key = 'super_secret_key_123'
@@ -78,6 +86,14 @@ PLATFORM_WALLETS = {
 FEE_PERCENT = 0.01
 TRACKING_DEADLINE_DAYS = 3
 
+
+# --- Email Configuration ---
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+SENDER_EMAIL = "cryptomarketplace.app@gmail.com"
+SENDER_PASSWORD = "mecq vuvz hftf atyj"
+
+
 def calculate_distance(lat1, lon1, lat2, lon2):
     try:
         R = 6371.0
@@ -95,37 +111,30 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def delete_image_from_cloudinary(image_url):
-    if not image_url: return
+def send_email_code(to_email, code, action="login"):
+    subject = 'Crypto Marketplace - Security Verification'
+
+    if action == "add_wallet":
+        body = f"You requested to ADD a new payout wallet.\nYour verification code is: {code}\nIf this was not you, secure your account immediately."
+    elif action == "delete_wallet":
+        body = f"You requested to DELETE a payout wallet.\nYour verification code is: {code}\nIf this was not you, secure your account immediately."
+    else:
+        body = f"Your login verification code is: {code}\nDo not share this code with anyone."
+
+    msg = MIMEText(body)
+    msg['Subject'] = subject
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = to_email
+
     try:
-        public_id = image_url.split('/')[-1].split('.')[0]
-        cloudinary.uploader.destroy(public_id)
-        print(f"Deleted from Cloudinary: {public_id}")
-    except Exception as e:
-        print(f"Error deleting image: {e}")
-
-
-def send_email_code(to_email, code):
-    try:
-        msg = MIMEMultipart()
-        msg['From'] = f"Crypto Marketplace Team <{EMAIL_SENDER}>"
-        msg['To'] = to_email
-        msg['Subject'] = "Crypto Marketplace - Verification Code"
-
-        body = f"Welcome to Crypto Marketplace!\n\nYour verification code is: {code}\n\nEnter this code on the website to activate your account."
-        msg.attach(MIMEText(body, 'plain'))
-
-        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
         server.starttls()
-        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        text = msg.as_string()
-        server.sendmail(EMAIL_SENDER, to_email, text)
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.sendmail(SENDER_EMAIL, to_email, msg.as_string())
         server.quit()
-        print("Email sent successfully")
         return True
-    except Exception:
-        # Safe print to prevent Windows console crash
-        print("Failed to send email. Check credentials or connection.")
+    except Exception as e:
+        print(f"Email failed to send: {e}")
         return False
 
 @app.route('/')
@@ -350,14 +359,137 @@ def login():
 
             check_bonus_expiry(user['_id'])
 
-            session['username'] = user['username']
-            session['user_id'] = str(user['_id'])
-            return jsonify({"message": "Login successful!"}), 200
+            session['temp_user_id'] = str(user['_id'])
+            session['temp_username'] = user['username']
+            session['2fa_attempts'] = 0
+
+            if user.get('use_authenticator') and user.get('totp_secret'):
+                return jsonify({"status": "2fa_required", "method": "authenticator"}), 200
+            else:
+                code = str(random.randint(100000, 999999))
+                session['2fa_code'] = code
+                send_email_code(user['email'], code)
+                return jsonify({"status": "2fa_required", "method": "email"}), 200
 
     return jsonify({"error": "Invalid credentials"}), 401
 
 
+@app.route('/verify-2fa', methods=['POST'])
+def verify_2fa():
+    data = request.json
+    entered_code = data.get('code')
+
+    if 'temp_user_id' not in session:
+        return jsonify({"error": "Session expired. Please try logging in again."}), 400
+
+    attempts = session.get('2fa_attempts', 0)
+    if attempts >= 3:
+        session.pop('temp_user_id', None)
+        session.pop('temp_username', None)
+        session.pop('2fa_code', None)
+        session.pop('2fa_attempts', None)
+        return jsonify({"error": "Security lockout. Too many failed attempts. Please restart login."}), 403
+
+    user = users_col.find_one({"_id": ObjectId(session['temp_user_id'])})
+    is_valid = False
+
+    # Check if user has Google Authenticator enabled
+    if user and user.get('use_authenticator') and user.get('totp_secret'):
+        totp = pyotp.TOTP(user['totp_secret'])
+        is_valid = totp.verify(entered_code)
+    else:
+        # Fallback to Email 2FA
+        if '2fa_code' in session and str(entered_code) == str(session['2fa_code']):
+            is_valid = True
+
+    if is_valid:
+        session['user_id'] = session['temp_user_id']
+        session['username'] = session['temp_username']
+        session.pop('temp_user_id', None)
+        session.pop('temp_username', None)
+        session.pop('2fa_code', None)
+        session.pop('2fa_attempts', None)
+        return jsonify({"status": "success", "message": "Logged in successfully!"}), 200
+
+    session['2fa_attempts'] = attempts + 1
+    remaining = 3 - session['2fa_attempts']
+
+    if remaining <= 0:
+        session.pop('temp_user_id', None)
+        session.pop('temp_username', None)
+        session.pop('2fa_code', None)
+        session.pop('2fa_attempts', None)
+        return jsonify({"error": "Maximum attempts reached. Session destroyed."}), 403
+
+    return jsonify({"error": f"Invalid code. {remaining} attempts remaining."}), 400
+
+
+@app.route('/verify-wallet-2fa', methods=['POST'])
+def verify_wallet_2fa():
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json
+    entered_code = data.get('code')
+
+    if 'pending_wallet_data' not in session:
+        return jsonify({"error": "Session expired"}), 400
+
+    attempts = session.get('wallet_2fa_attempts', 0)
+    if attempts >= 3:
+        session.pop('pending_wallet_data', None)
+        session.pop('wallet_2fa_code', None)
+        session.pop('wallet_2fa_attempts', None)
+        return jsonify({"error": "Security lockout. Action cancelled."}), 403
+
+    user = users_col.find_one({"_id": ObjectId(session['user_id'])})
+    is_valid = False
+
+    if user and user.get('use_authenticator') and user.get('totp_secret'):
+        totp = pyotp.TOTP(user['totp_secret'])
+        is_valid = totp.verify(entered_code)
+    else:
+        if 'wallet_2fa_code' in session and str(entered_code) == str(session['wallet_2fa_code']):
+            is_valid = True
+
+    if is_valid:
+        wallet_to_add = session['pending_wallet_data']
+        if wallet_to_add.get('activation_date') and isinstance(wallet_to_add['activation_date'], str):
+            wallet_to_add['activation_date'] = datetime.fromisoformat(wallet_to_add['activation_date'])
+
+        users_col.update_one(
+            {"_id": ObjectId(session['user_id'])},
+            {"$pull": {"payout_wallets": {"currency": wallet_to_add['currency'], "status": "deleted"}}}
+        )
+
+        users_col.update_one(
+            {"_id": ObjectId(session['user_id'])},
+            {"$push": {"payout_wallets": wallet_to_add}}
+        )
+
+        msg = "Wallet saved and activated immediately!" if wallet_to_add[
+                                                               'status'] == 'active' else "Change requested. 48-hour cooldown started."
+
+        session.pop('pending_wallet_data', None)
+        session.pop('wallet_2fa_code', None)
+        session.pop('wallet_2fa_attempts', None)
+        return jsonify({"status": "success", "message": msg}), 200
+
+    session['wallet_2fa_attempts'] = attempts + 1
+    remaining = 3 - session['wallet_2fa_attempts']
+
+    if remaining <= 0:
+        session.pop('pending_wallet_data', None)
+        session.pop('wallet_2fa_code', None)
+        session.pop('wallet_2fa_attempts', None)
+        return jsonify({"error": "Maximum attempts reached. Action cancelled. Try again."}), 403
+
+    return jsonify({"error": f"Invalid code. {remaining} attempts remaining."}), 400
+
+
 GOOGLE_CLIENT_ID = "716094634129-is5abmoghh7aogil36vh8krnvjdeult7.apps.googleusercontent.com"
+
+
 @app.route('/google-login', methods=['POST'])
 def google_login():
     data = request.json
@@ -365,7 +497,6 @@ def google_login():
 
     try:
         idinfo = id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
-
         email = idinfo['email']
         name = idinfo.get('name', email.split('@')[0])
         google_id = idinfo['sub']
@@ -375,26 +506,28 @@ def google_login():
 
         if not user:
             new_user = {
-                "username": name,
-                "email": email,
-                "password": "",
-                "created_at": datetime.now(),
-                "is_verified": True,
-                "verification_code": "",
-                "avatar": picture,
-                "avg_rating": 0,
-                "reviews": [],
-                "wallet_balance": 100,
-                "google_id": google_id
+                "username": name, "email": email, "password": "", "created_at": datetime.now(),
+                "is_verified": True, "verification_code": "", "avatar": picture, "avg_rating": 0,
+                "reviews": [], "wallet_balance": 100, "google_id": google_id
             }
             result = users_col.insert_one(new_user)
-            session['username'] = new_user['username']
-            session['user_id'] = str(result.inserted_id)
+            user_id = str(result.inserted_id)
+            username = new_user['username']
         else:
-            session['username'] = user['username']
-            session['user_id'] = str(user['_id'])
+            user_id = str(user['_id'])
+            username = user['username']
 
-        return jsonify({"message": "Login successful"}), 200
+        session['temp_user_id'] = user_id
+        session['temp_username'] = username
+        session['2fa_attempts'] = 0
+
+        if user and user.get('use_authenticator') and user.get('totp_secret'):
+            return jsonify({"status": "2fa_required", "method": "authenticator"}), 200
+        else:
+            code = str(random.randint(100000, 999999))
+            session['2fa_code'] = code
+            send_email_code(email, code)
+            return jsonify({"status": "2fa_required", "method": "email"}), 200
 
     except ValueError:
         return jsonify({"error": "Invalid token"}), 401
@@ -596,11 +729,18 @@ def add_product():
         except Exception as e:
             print(f"Geocoding error: {e}")
 
+    try:
+        product_price = float(request.form.get('price', 0))
+        if product_price <= 0:
+            return jsonify({"error": "Price must be strictly greater than zero."}), 400
+    except ValueError:
+        return jsonify({"error": "Invalid price format. Numbers only."}), 400
+
     new_product = {
         "title": request.form.get('title'),
         "description": request.form.get('description'),
         "listing_type": request.form.get('listing_type', 'regular'),
-        "price": float(request.form.get('price')),
+        "price": product_price,
         "currency": request.form.get('currency'),
         "category": request.form.get('category'),
         "country": country,
@@ -656,6 +796,9 @@ def get_messages(chat_id):
     chat = chats_col.find_one({"_id": ObjectId(chat_id)})
     if not chat: return jsonify({"error": "Chat not found"}), 404
 
+    if session['user_id'] not in chat.get('participants', []):
+        return jsonify({"error": "Unauthorized access"}), 403
+
     updated = False
     for msg in chat['messages']:
         if not msg.get('read') and msg['sender'] != session['username']:
@@ -671,14 +814,25 @@ def get_messages(chat_id):
 
 @app.route('/send-message', methods=['POST'])
 def send_message():
+    if 'username' not in session: return jsonify({"error": "Login required"}), 401
+
     data = request.json
+    chat_id = data.get('chat_id')
+    raw_content = data.get('content', '')
+
+    chat = chats_col.find_one({"_id": ObjectId(chat_id)})
+    if not chat or session['user_id'] not in chat.get('participants', []):
+        return jsonify({"error": "Unauthorized"}), 403
+
+    safe_content = str(escape(raw_content))
+
     msg = {
         "sender": session['username'],
-        "content": data['content'],
+        "content": safe_content,
         "timestamp": datetime.now().strftime("%H:%M"),
         "read": False
     }
-    chats_col.update_one({"_id": ObjectId(data['chat_id'])}, {"$push": {"messages": msg}})
+    chats_col.update_one({"_id": ObjectId(chat_id)}, {"$push": {"messages": msg}})
     return jsonify({"message": "Sent"})
 
 
@@ -724,19 +878,12 @@ def upload_avatar():
 def delete_product(product_id):
     if 'username' not in session: return jsonify({"error": "Unauthorized"}), 401
 
-    product = products_col.find_one({"_id": ObjectId(product_id), "seller_id": session['user_id']})
+    result = products_col.delete_one({"_id": ObjectId(product_id), "seller_id": session['user_id']})
 
-    if product:
-        if 'images' in product:
-            for img_url in product['images']:
-                delete_image_from_cloudinary(img_url)
-        elif 'image' in product and product['image'].startswith('http'):
-            delete_image_from_cloudinary(product['image'])
+    if result.deleted_count > 0:
+        return jsonify({"message": "Product deleted successfully."}), 200
 
-        products_col.delete_one({"_id": ObjectId(product_id)})
-        return jsonify({"message": "Product and images deleted"})
-
-    return jsonify({"error": "Failed to delete"}), 400
+    return jsonify({"error": "Product not found or unauthorized."}), 400
 
 
 @app.route('/update-status', methods=['POST'])
@@ -748,62 +895,79 @@ def update_status():
     new_status = data.get('status')
 
     if new_status == 'sold':
-        product = products_col.find_one({"_id": ObjectId(product_id), "seller_id": session['user_id']})
-        if product:
-            if 'images' in product:
-                for img_url in product['images']:
-                    delete_image_from_cloudinary(img_url)
-            elif 'image' in product and product['image'].startswith('http'):
-                delete_image_from_cloudinary(product['image'])
-
-            products_col.update_one(
-                {"_id": ObjectId(product_id)},
-                {"$set": {"status": "sold", "images": [], "image": ""}}
-            )
-            return jsonify({"message": "Marked as sold & images deleted"})
+        products_col.update_one(
+            {"_id": ObjectId(product_id), "seller_id": session['user_id']},
+            {"$set": {"status": "sold", "images": [], "image": ""}}
+        )
+        return jsonify({"message": "Marked as sold."}), 200
 
     products_col.update_one(
         {"_id": ObjectId(product_id), "seller_id": session['user_id']},
         {"$set": {"status": new_status}}
     )
 
-    return jsonify({"message": "Status updated"})
+    return jsonify({"message": "Status updated."}), 200
 
 
 @app.route('/add-review', methods=['POST'])
 def add_review():
-    if 'username' not in session: return jsonify({"error": "Login required"}), 401
+    if 'username' not in session:
+        return jsonify({"error": "Login required"}), 401
 
     data = request.json
     seller_id = data.get('seller_id')
-    rating = int(data.get('rating'))
+
+    try:
+        rating = int(data.get('rating', 0))
+        if rating < 1 or rating > 5:
+            return jsonify({"error": "Invalid rating value."}), 400
+    except ValueError:
+        return jsonify({"error": "Invalid rating format."}), 400
+
     comment = data.get('comment', '')
 
     if seller_id == session['user_id']:
-        return jsonify({"error": "You cannot rate yourself"}), 400
+        return jsonify({"error": "You cannot rate yourself."}), 400
+
+    # DEFENSE 1: Proof of Purchase (User must be the actual buyer of a sold item from this seller)
+    valid_purchase = products_col.find_one({
+        "seller_id": seller_id,
+        "buyer_id": session['user_id'],
+        "status": "sold"
+    })
+
+    if not valid_purchase:
+        return jsonify({"error": "Action denied. You can only review sellers after a completed purchase."}), 403
+
+    seller = users_col.find_one({"_id": ObjectId(seller_id)})
+    if not seller:
+        return jsonify({"error": "Seller not found."}), 404
+
+    # DEFENSE 2: Anti-Spam (One review per buyer per seller)
+    existing_reviews = seller.get('reviews', [])
+    if any(r.get('reviewer') == session['username'] for r in existing_reviews):
+        return jsonify({"error": "You have already reviewed this seller."}), 403
 
     review = {
         "reviewer": session['username'],
         "rating": rating,
-        "comment": comment,
+        "comment": str(escape(comment)),
         "date": datetime.now()
     }
 
+    existing_reviews.append(review)
+    avg_rating = sum(r['rating'] for r in existing_reviews) / len(existing_reviews)
+
+    # Atomic push and average update
     users_col.update_one(
         {"_id": ObjectId(seller_id)},
-        {"$push": {"reviews": review}}
+        {
+            "$push": {"reviews": review},
+            "$set": {"avg_rating": round(avg_rating, 1)}
+        }
     )
 
-    seller = users_col.find_one({"_id": ObjectId(seller_id)})
-    reviews = seller.get('reviews', [])
-    if reviews:
-        avg_rating = sum(r['rating'] for r in reviews) / len(reviews)
-        users_col.update_one(
-            {"_id": ObjectId(seller_id)},
-            {"$set": {"avg_rating": round(avg_rating, 1)}}
-        )
-
-    return jsonify({"message": "Review added!"})
+    return jsonify({"message": "Review added successfully!"}), 200
 
 
 @app.route('/unread-count')
@@ -829,20 +993,39 @@ def promote_product():
 
     data = request.json
     product_id = data.get('product_id')
-    days = int(data.get('days'))
+    try:
+        days = int(data.get('days', 0))
+        if days <= 0:
+            return jsonify({"error": "Invalid duration."}), 400
+    except ValueError:
+        return jsonify({"error": "Invalid duration format."}), 400
+
     payment_method = data.get('payment_method')
 
     price_per_day = 1 if days >= 7 else 2
-    total_price = price_per_day * days
+    total_price = float(price_per_day * days)
 
     if payment_method == 'FREE_COIN':
         total_price = total_price * 0.85
 
-    print(f"Processing payment: ${total_price} via {payment_method} for {days} days.")
+        # ATOMIC OPERATION: Deduct only if user has enough coins
+        user_update = users_col.update_one(
+            {"_id": ObjectId(session['user_id']), "wallet_balance": {"$gte": total_price}},
+            {"$inc": {"wallet_balance": -total_price}}
+        )
+
+        if user_update.modified_count == 0:
+            return jsonify({"error": "Insufficient FREE COINS in your wallet."}), 400
+
+    elif payment_method == 'USD':
+        # TODO: Integrate Stripe/PayPal here in the future
+        pass
+    else:
+        return jsonify({"error": "Invalid payment method."}), 400
 
     expiry_date = datetime.now() + timedelta(days=days)
 
-    products_col.update_one(
+    product_update = products_col.update_one(
         {"_id": ObjectId(product_id), "seller_id": session['user_id']},
         {"$set": {
             "is_promoted": True,
@@ -851,28 +1034,31 @@ def promote_product():
         }}
     )
 
-    return jsonify({"message": "Product Promoted Successfully!", "new_expiry": expiry_date.strftime("%d/%m/%Y")})
+    if product_update.modified_count == 0:
+        # ROLLBACK: If product wasn't found, return the money
+        if payment_method == 'FREE_COIN':
+            users_col.update_one(
+                {"_id": ObjectId(session['user_id'])},
+                {"$inc": {"wallet_balance": total_price}}
+            )
+        return jsonify({"error": "Product not found or you are not the owner."}), 404
+
+    return jsonify({"message": f"Promoted for {days} days!", "new_expiry": expiry_date.strftime("%d/%m/%Y")}), 200
 
 
 @app.route('/confirm-sale', methods=['POST'])
 def confirm_sale():
     if 'username' not in session: return jsonify({"error": "Unauthorized"}), 401
+
     data = request.json
     product_id = data.get('product_id')
     buyer_id = data.get('buyer_id')
-
-    product = products_col.find_one({"_id": ObjectId(product_id), "seller_id": session['user_id']})
-    if product:
-        if 'images' in product:
-            for url in product['images']: delete_image_from_cloudinary(url)
-        elif 'image' in product:
-            delete_image_from_cloudinary(product['image'])
 
     products_col.update_one(
         {"_id": ObjectId(product_id), "seller_id": session['user_id']},
         {"$set": {"status": "sold", "buyer_id": buyer_id, "images": [], "image": ""}}
     )
-    return jsonify({"message": "Sale confirmed & images deleted!"})
+    return jsonify({"message": "Sale confirmed."}), 200
 
 
 @app.route('/user/<username>')
@@ -1004,28 +1190,29 @@ def github_callback():
 
     if not user:
         new_user = {
-            "username": name,
-            "email": primary_email,
-            "password": "",
-            "created_at": datetime.now(),
-            "is_verified": True,
-            "verification_code": "",
-            "avatar": avatar,
-            "avg_rating": 0,
-            "reviews": [],
-            "wallet_balance": 100,
-            "github_id": github_id
+            "username": name, "email": primary_email, "password": "", "created_at": datetime.now(),
+            "is_verified": True, "verification_code": "", "avatar": avatar, "avg_rating": 0,
+            "reviews": [], "wallet_balance": 100, "github_id": github_id
         }
         result = users_col.insert_one(new_user)
-        session['username'] = new_user['username']
-        session['user_id'] = str(result.inserted_id)
+        u_id = str(result.inserted_id)
+        u_name = new_user['username']
+        u_email = primary_email
     else:
         if not user.get('github_id'):
-            users_col.update_one({"_id": user['_id']}, {"$set": {"github_id": github_id, "avatar": avatar if not user.get('avatar') else user['avatar']}})
-        session['username'] = user['username']
-        session['user_id'] = str(user['_id'])
+            users_col.update_one({"_id": user['_id']}, {
+                "$set": {"github_id": github_id, "avatar": avatar if not user.get('avatar') else user['avatar']}})
+        u_id = str(user['_id'])
+        u_name = user['username']
+        u_email = user.get('email', primary_email)
 
-    return redirect('/')
+    code = str(random.randint(100000, 999999))
+    session['temp_user_id'] = u_id
+    session['temp_username'] = u_name
+    session['2fa_code'] = code
+    send_email_code(u_email, code)
+
+    return redirect('/login-page?2fa=true')
 
 @app.route('/discord-login')
 def discord_login():
@@ -1074,28 +1261,31 @@ def discord_callback():
 
     if not user:
         new_user = {
-            "username": name,
-            "email": email,
-            "password": "",
-            "created_at": datetime.now(),
-            "is_verified": True,
-            "verification_code": "",
-            "avatar": avatar_url,
-            "avg_rating": 0,
-            "reviews": [],
-            "wallet_balance": 100,
-            "discord_id": discord_id
+            "username": name, "email": email, "password": "", "created_at": datetime.now(),
+            "is_verified": True, "verification_code": "", "avatar": avatar_url, "avg_rating": 0,
+            "reviews": [], "wallet_balance": 100, "discord_id": discord_id
         }
         result = users_col.insert_one(new_user)
-        session['username'] = new_user['username']
-        session['user_id'] = str(result.inserted_id)
+        u_id = str(result.inserted_id)
+        u_name = new_user['username']
+        u_email = email
     else:
         if not user.get('discord_id'):
-            users_col.update_one({"_id": user['_id']}, {"$set": {"discord_id": discord_id, "avatar": avatar_url if not user.get('avatar') else user['avatar']}})
-        session['username'] = user['username']
-        session['user_id'] = str(user['_id'])
+            users_col.update_one({"_id": user['_id']}, {
+                "$set": {"discord_id": discord_id, "avatar": avatar_url if not user.get('avatar') else user['avatar']}})
+        u_id = str(user['_id'])
+        u_name = user['username']
+        u_email = user.get('email', email)
 
-    return redirect('/')
+    code = str(random.randint(100000, 999999))
+    session['temp_user_id'] = u_id
+    session['temp_username'] = u_name
+    session['2fa_code'] = code
+    send_email_code(u_email, code)
+
+    return redirect('/login-page?2fa=true')
+
+
 @app.route('/checkout', methods=['POST'])
 def checkout():
     if 'username' not in session:
@@ -1105,26 +1295,40 @@ def checkout():
     product_id = data.get('product_id')
     buyer_id = session['user_id']
 
-    product = products_col.find_one({"_id": ObjectId(product_id), "status": "available"})
+    product = products_col.find_one({"_id": ObjectId(product_id)})
     if not product:
-        return jsonify({"error": "Product is no longer available"}), 400
+        return jsonify({"error": "Product not found."}), 404
 
     if str(product['seller_id']) == buyer_id:
-        return jsonify({"error": "You cannot buy your own product"}), 400
+        return jsonify({"error": "You cannot buy your own product."}), 400
 
-    buyer = users_col.find_one({"_id": ObjectId(buyer_id)})
-    price = product['price']
+    price = float(product['price'])
 
-    if buyer.get('wallet_balance', 0) < price:
-        return jsonify({"error": "Insufficient funds in your wallet"}), 400
+    # ATOMIC OPERATION 1: Deduct balance ONLY IF balance >= price
+    buyer_update = users_col.update_one(
+        {"_id": ObjectId(buyer_id), "wallet_balance": {"$gte": price}},
+        {"$inc": {"wallet_balance": -price}}
+    )
+
+    if buyer_update.modified_count == 0:
+        return jsonify({"error": "Insufficient funds or transaction conflict. Please try again."}), 400
+
+    # ATOMIC OPERATION 2: Lock the product ONLY IF it is still 'available'
+    product_update = products_col.update_one(
+        {"_id": ObjectId(product_id), "status": "available"},
+        {"$set": {"status": "escrow"}}
+    )
+
+    if product_update.modified_count == 0:
+        # FATAL ROLLBACK: The product was bought by someone else a millisecond ago!
+        users_col.update_one(
+            {"_id": ObjectId(buyer_id)},
+            {"$inc": {"wallet_balance": price}}
+        )
+        return jsonify({"error": "Too late! Product was just snatched by another buyer."}), 400
 
     fee = price * FEE_PERCENT
     seller_receives = price - fee
-
-    users_col.update_one(
-        {"_id": ObjectId(buyer_id)},
-        {"$inc": {"wallet_balance": -price}}
-    )
 
     new_order = {
         "product_id": product_id,
@@ -1141,11 +1345,6 @@ def checkout():
         "tracking_deadline": datetime.now() + timedelta(days=TRACKING_DEADLINE_DAYS)
     }
     orders_col.insert_one(new_order)
-
-    products_col.update_one(
-        {"_id": ObjectId(product_id)},
-        {"$set": {"status": "escrow"}}
-    )
 
     return jsonify({"message": "Payment secured in Escrow. Waiting for seller to ship!"}), 200
 
@@ -1201,32 +1400,7 @@ def confirm_delivery():
     return jsonify({"message": "Delivery confirmed. Funds released to seller!"}), 200
 
 
-@app.route('/check-expired-escrow', methods=['POST'])
-def check_expired_escrow():
-    expired_orders = orders_col.find({
-        "status": "pending_tracking",
-        "tracking_deadline": {"$lt": datetime.now()}
-    })
 
-    refund_count = 0
-    for order in expired_orders:
-        users_col.update_one(
-            {"_id": ObjectId(order['buyer_id'])},
-            {"$inc": {"wallet_balance": order['price']}}
-        )
-
-        orders_col.update_one(
-            {"_id": order['_id']},
-            {"$set": {"status": "refunded", "refunded_at": datetime.now()}}
-        )
-
-        products_col.update_one(
-            {"_id": ObjectId(order['product_id'])},
-            {"$set": {"status": "available"}}
-        )
-        refund_count += 1
-
-    return jsonify({"message": f"{refund_count} orders auto-refunded to buyers due to shipping timeout."}), 200
 
 
 @app.route('/orders')
@@ -1361,6 +1535,35 @@ def monitor_orders():
                 {"_id": ObjectId(order['product_id'])},
                 {"$set": {"status": "available", "buyer_id": ""}}
             )
+        # Activate pending wallets after 48 hours
+        users_with_pending = users_col.find({"payout_wallets.status": "pending"})
+        for user in users_with_pending:
+            wallets = user.get('payout_wallets', [])
+            changed = False
+
+            newly_activated_ids = []
+            for w in wallets:
+                if w.get('status') == 'pending' and w.get('activation_date') and datetime.now() > w[
+                    'activation_date']:
+                    w['status'] = 'active'
+                    newly_activated_ids.append(w['id'])
+                    changed = True
+
+            if changed:
+                currencies_updated = [w['currency'] for w in wallets if w['id'] in newly_activated_ids]
+
+                final_wallets = []
+                for w in wallets:
+                    if w['id'] in newly_activated_ids:
+                        final_wallets.append(w)
+                    elif (w.get('status') == 'active' or not w.get('status')) and w.get(
+                            'currency') in currencies_updated:
+                        pass  # Drop the old replaced wallet
+                    else:
+                        final_wallets.append(w)
+
+                users_col.update_one({"_id": user['_id']}, {"$set": {"payout_wallets": final_wallets}})
+
 
 
 import uuid
@@ -1379,6 +1582,17 @@ def add_payout_wallet():
     if not currency or not network or not address:
         return jsonify({"error": "Missing wallet details"}), 400
 
+    user = users_col.find_one({"_id": ObjectId(session['user_id'])})
+    existing_wallets = user.get('payout_wallets', [])
+
+    # Check if there is an ACTIVE or PENDING wallet
+    if any(w.get('currency') == currency and w.get('status') in ['active', 'pending', None] for w in existing_wallets):
+        return jsonify({"error": f"You already have an active or pending {currency} wallet. Delete it first."}), 400
+
+    # Look for a Soft-Deleted wallet of this currency
+    deleted_wallet = next(
+        (w for w in existing_wallets if w.get('currency') == currency and w.get('status') == 'deleted'), None)
+
     new_wallet = {
         "id": str(uuid.uuid4()),
         "currency": currency,
@@ -1387,12 +1601,45 @@ def add_payout_wallet():
         "added_at": datetime.now()
     }
 
+    # SMART ROUTING
+    if not deleted_wallet:
+        # First time ever -> Instant!
+        new_wallet["status"] = "active"
+        new_wallet["activation_date"] = None
+    elif deleted_wallet['address'] == address:
+        # Restoring the EXACT SAME wallet -> Instant!
+        new_wallet["status"] = "active"
+        new_wallet["activation_date"] = None
+    else:
+        # Replacing with a DIFFERENT address -> 48h Cooldown!
+        new_wallet["status"] = "pending"
+        new_wallet["activation_date"] = datetime.now() + timedelta(hours=48)
+
+    session['pending_wallet_data'] = new_wallet
+    session['wallet_2fa_attempts'] = 0
+
+    if user.get('use_authenticator') and user.get('totp_secret'):
+        return jsonify({"status": "2fa_required", "method": "authenticator"}), 200
+    else:
+        code = str(random.randint(100000, 999999))
+        session['wallet_2fa_code'] = code
+        send_email_code(user['email'], code, "add_wallet")
+        return jsonify({"status": "2fa_required", "method": "email"}), 200
+
+
+
+
+
+@app.route('/cancel-wallet-activation/<wallet_id>', methods=['POST'])
+def cancel_wallet_activation(wallet_id):
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
     users_col.update_one(
         {"_id": ObjectId(session['user_id'])},
-        {"$push": {"payout_wallets": new_wallet}}
+        {"$pull": {"payout_wallets": {"id": wallet_id, "status": "pending"}}}
     )
-
-    return jsonify({"message": "Wallet saved successfully!"}), 200
+    return jsonify({"message": "Activation cancelled and wallet removed."}), 200
 
 
 @app.route('/delete-payout-wallet/<wallet_id>', methods=['POST'])
@@ -1410,6 +1657,210 @@ def check_blockchain_for_payment(address, expected_amount):
     # This is a placeholder for real blockchain integration
     return False
 
+
+def send_2fa_email(to_email, code):
+    msg = MIMEText(f"Your Secure Escrow login code is: {code}\nDo not share this code with anyone.")
+    msg['Subject'] = 'Login Verification Code'
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = to_email
+
+    try:
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.sendmail(SENDER_EMAIL, to_email, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Email failed to send: {e}")
+        return False
+
+
+@app.route('/request-delete-wallet', methods=['POST'])
+def request_delete_wallet():
+    if 'username' not in session: return jsonify({"error": "Unauthorized"}), 401
+
+    user = users_col.find_one({"_id": ObjectId(session['user_id'])})
+    wallet_id = request.json.get('wallet_id')
+
+    session['pending_delete_wallet_id'] = wallet_id
+    session['delete_2fa_attempts'] = 0
+
+    if user.get('use_authenticator') and user.get('totp_secret'):
+        return jsonify({"status": "2fa_required", "method": "authenticator"}), 200
+    else:
+        code = str(random.randint(100000, 999999))
+        session['delete_2fa_code'] = code
+        send_email_code(user['email'], code, "delete_wallet")
+        return jsonify({"status": "2fa_required", "method": "email"}), 200
+
+
+@app.route('/verify-delete-wallet', methods=['POST'])
+def verify_delete_wallet():
+    if 'username' not in session: return jsonify({"error": "Unauthorized"}), 401
+
+    entered_code = request.json.get('code')
+    if 'pending_delete_wallet_id' not in session:
+        return jsonify({"error": "Session expired."}), 400
+
+    attempts = session.get('delete_2fa_attempts', 0)
+    if attempts >= 3:
+        session.pop('pending_delete_wallet_id', None)
+        session.pop('delete_2fa_code', None)
+        session.pop('delete_2fa_attempts', None)
+        return jsonify({"error": "Security lockout. Action cancelled."}), 403
+
+    user = users_col.find_one({"_id": ObjectId(session['user_id'])})
+    is_valid = False
+
+    if user and user.get('use_authenticator') and user.get('totp_secret'):
+        totp = pyotp.TOTP(user['totp_secret'])
+        is_valid = totp.verify(entered_code)
+    else:
+        if 'delete_2fa_code' in session and str(entered_code) == str(session['delete_2fa_code']):
+            is_valid = True
+
+    if is_valid:
+        wallet_id = session['pending_delete_wallet_id']
+
+        users_col.update_one(
+            {"_id": ObjectId(session['user_id']), "payout_wallets.id": wallet_id},
+            {"$set": {"payout_wallets.$.status": "deleted"}}
+        )
+
+        session.pop('pending_delete_wallet_id', None)
+        session.pop('delete_2fa_code', None)
+        session.pop('delete_2fa_attempts', None)
+        return jsonify({"status": "success", "message": "Wallet deleted successfully."}), 200
+
+    session['delete_2fa_attempts'] = attempts + 1
+    remaining = 3 - session['delete_2fa_attempts']
+
+    if remaining <= 0:
+        session.pop('pending_delete_wallet_id', None)
+        session.pop('delete_2fa_code', None)
+        session.pop('delete_2fa_attempts', None)
+        return jsonify({"error": "Maximum attempts reached. Action cancelled."}), 403
+
+    return jsonify({"error": f"Invalid code. {remaining} attempts remaining."}), 400
+
+
+@app.route('/setup-google-auth', methods=['GET'])
+def setup_google_auth():
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    user = users_col.find_one({"_id": ObjectId(session['user_id'])})
+    if user.get('use_authenticator'):
+        return jsonify({"error": "Authenticator is already enabled."}), 400
+
+    # Generate a random 32-character base32 secret
+    secret = pyotp.random_base32()
+
+    # Store temporarily until verified
+    session['temp_totp_secret'] = secret
+
+    # Build the provisioning URI for Google Authenticator
+    totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(
+        name=session['username'],
+        issuer_name="Crypto Marketplace"
+    )
+
+    # Generate the QR Code image in memory
+    qr = qrcode.make(totp_uri)
+    buffered = BytesIO()
+    qr.save(buffered, format="PNG")
+    qr_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    return jsonify({
+        "qr_code": f"data:image/png;base64,{qr_base64}",
+        "secret": secret
+    }), 200
+
+
+@app.route('/verify-google-auth-setup', methods=['POST'])
+def verify_google_auth_setup():
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.json
+    entered_code = data.get('code')
+    secret = session.get('temp_totp_secret')
+
+    if not secret:
+        return jsonify({"error": "No setup in progress. Please refresh and try again."}), 400
+
+    # Verify the code against the temporary secret
+    totp = pyotp.TOTP(secret)
+    if totp.verify(entered_code):
+        # Success! Lock it into the database permanently
+        users_col.update_one(
+            {"_id": ObjectId(session['user_id'])},
+            {"$set": {
+                "totp_secret": secret,
+                "use_authenticator": True
+            }}
+        )
+        session.pop('temp_totp_secret', None)
+        return jsonify(
+            {"message": "Google Authenticator successfully linked! From now on, use your app for security."}), 200
+
+    return jsonify({"error": "Invalid code. Make sure you scanned the correct QR code."}), 400
+
+
+@app.route('/api/user-data')
+def api_user_data():
+    if 'username' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    user = users_col.find_one({"_id": ObjectId(session['user_id'])})
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    return jsonify({
+        "wallet_balance": user.get('wallet_balance', 0)
+    }), 200
+
+
+@app.route('/admin')
+def admin_dashboard():
+    if 'username' not in session or session['username'] not in ADMIN_USERNAMES:
+        return jsonify({"error": "Forbidden. Admin access strictly prohibited."}), 403
+
+    total_users = users_col.count_documents({})
+    active_products = products_col.count_documents({"status": "available"})
+
+    revenue_pipeline = [
+        {"$match": {"status": "completed"}},
+        {"$group": {
+            "_id": None,
+            "total_fees": {"$sum": "$platform_fee"},
+            "total_volume": {"$sum": "$price"}
+        }}
+    ]
+
+    rev_data = list(orders_col.aggregate(revenue_pipeline))
+    platform_fees = rev_data[0]['total_fees'] if rev_data else 0
+    total_volume = rev_data[0]['total_volume'] if rev_data else 0
+
+    pending_orders = orders_col.count_documents({
+        "status": {"$in": ["awaiting_payment", "pending_tracking", "shipped"]}
+    })
+
+    stats = {
+        "users": total_users,
+        "products": active_products,
+        "fees": round(platform_fees, 2),
+        "volume": round(total_volume, 2),
+        "pending_orders": pending_orders
+    }
+
+    recent_orders = list(orders_col.find().sort("created_at", -1).limit(10))
+    for order in recent_orders:
+        order['_id'] = str(order['_id'])
+        order['created_at_str'] = order['created_at'].strftime("%Y-%m-%d %H:%M")
+
+    return render_template('admin.html', stats=stats, orders=recent_orders, user=session['username'])
 
 scheduler.init_app(app)
 scheduler.start()

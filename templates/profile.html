@@ -14,6 +14,33 @@
 
         .product-img { width: 80px; height: 80px; object-fit: cover; border-radius: 8px; }
         .badge-promoted { background: linear-gradient(45deg, #ffc107, #ff9800); color: black; }
+        /* --- Dark Mode Custom Overrides --- */
+        [data-bs-theme="dark"] body {
+            background-color: #121212 !important;
+            color: #e0e0e0;
+        }
+        [data-bs-theme="dark"] .card,
+        [data-bs-theme="dark"] .stat-box,
+        [data-bs-theme="dark"] .order-card,
+        [data-bs-theme="dark"] .review-card {
+            background-color: #1e1e1e !important;
+            color: #fff !important;
+            border-color: #333 !important;
+        }
+        [data-bs-theme="dark"] .list-group-item {
+            background-color: #1e1e1e;
+            color: #fff;
+            border-color: #333;
+        }
+        [data-bs-theme="dark"] .navbar {
+            border-bottom: 1px solid #333;
+        }
+        [data-bs-theme="dark"] .bg-white, [data-bs-theme="dark"] .bg-light {
+            background-color: #1e1e1e !important;
+        }
+        [data-bs-theme="dark"] .text-muted {
+            color: #aaa !important;
+        }
     </style>
 </head>
 <body>
@@ -74,20 +101,49 @@
                         <tbody id="walletsTable">
                             {% if user.payout_wallets %}
                                 {% for w in user.payout_wallets %}
+                                {% if w.status != 'deleted' %}
                                 <tr>
                                     <td class="fw-bold">{{ w.currency }}</td>
                                     <td><span class="badge bg-secondary">{{ w.network }}</span></td>
                                     <td class="text-truncate" style="max-width: 150px;" title="{{ w.address }}">{{ w.address }}</td>
-                                    <td><button class="btn btn-sm btn-outline-danger" onclick="deleteWallet('{{ w.id }}')">🗑️ Remove</button></td>
+                                    <td>
+                                        {% if w.status == 'active' or not w.status %}
+                                            <span class="badge bg-success mb-1">🔒 ACTIVE</span><br>
+                                            <button class="btn btn-sm btn-outline-danger py-0 mt-1" onclick="requestDeleteWallet('{{ w.id }}')">🗑️ Delete</button>
+                                        {% elif w.status == 'pending' and w.activation_date %}
+                                            <div class="d-flex flex-column gap-1">
+                                                <span class="badge bg-warning text-dark">⏳ PENDING (48h)</span>
+                                                <small class="text-danger fw-bold cooldown-timer" data-expire="{{ w.activation_date.isoformat() }}">--:--:--</small>
+                                                <button class="btn btn-sm btn-danger py-0" onclick="panicCancel('{{ w.id }}')">🛑 CANCEL</button>
+                                            </div>
+                                        {% endif %}
+                                    </td>
                                 </tr>
+                                {% endif %}
                                 {% endfor %}
                             {% else %}
                                 <tr>
-                                    <td colspan="4" class="text-center text-muted">No wallets configured yet.</td>
+                                    <td colspan="4" class="text-center text-muted">No wallets configured yet. New wallets require 48h to activate.</td>
                                 </tr>
                             {% endif %}
                         </tbody>
                     </table>
+                </div>
+
+                <div class="modal fade" id="deleteWalletModal" tabindex="-1">
+                  <div class="modal-dialog">
+                    <div class="modal-content">
+                      <div class="modal-header bg-danger text-white">
+                        <h5 class="modal-title">Delete Wallet Verification</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                      </div>
+                      <div class="modal-body text-center">
+                        <p id="deleteWalletMessage">We've sent a 6-digit code to your email to confirm deletion.</p>
+                        <input type="text" class="form-control text-center fs-4 letter-spacing-2 mb-3" id="deleteWalletCode" placeholder="000000" maxlength="6">
+                        <button class="btn btn-danger w-100 fw-bold" onclick="submitDeleteWallet2FA()">Confirm Delete</button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <h6 class="mb-3 border-bottom pb-2">Add New Wallet</h6>
@@ -116,6 +172,31 @@
                         <button class="btn btn-primary w-100 fw-bold" onclick="addNewWallet()">➕ Add</button>
                     </div>
                 </div>
+
+                <div id="wallet2faBox" style="display: none;" class="mt-4 p-3 bg-light border rounded text-center">
+                    <h6 class="fw-bold text-danger">🚨 Security Verification</h6>
+                    <p id="wallet2faMessage" class="small text-muted mb-2">We sent a 6-digit code to your email to approve this wallet.</p>
+                    <div class="d-flex justify-content-center gap-2">
+                        <input type="text" class="form-control text-center fw-bold letter-spacing-2" id="walletVerificationCode" placeholder="000000" maxlength="6" style="max-width: 150px;">
+                        <button class="btn btn-warning fw-bold" onclick="submitWallet2FA()">Verify & Save</button>
+                    </div>
+                </div>
+
+                <div class="mt-4 pt-3 border-top border-secondary">
+                    <h6 class="fw-bold text-info mb-3">🛡️ Advanced Security</h6>
+
+                    {% if user.use_authenticator %}
+                        <div class="alert alert-success text-center mb-0 p-2 border-0 rounded-pill fw-bold" style="background-color: rgba(25, 135, 84, 0.2); color: #198754;">
+                            ✅ Google Authenticator Enabled
+                        </div>
+                    {% else %}
+                        <button class="btn btn-outline-info w-100 rounded-pill fw-bold mb-2" onclick="startGoogleAuthSetup()">
+                            Enable Google Authenticator
+                        </button>
+                        <small class="text-muted d-block text-center">Replaces email codes with app-based 2FA.</small>
+                    {% endif %}
+                </div>
+
             </div>
         </div>
 
@@ -176,6 +257,35 @@
         </div>
     </div>
 
+    <div class="modal fade" id="authSetupModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content bg-dark text-white border-secondary" style="border-radius: 16px;">
+                <div class="modal-header border-0">
+                    <h5 class="modal-title fw-bold">Secure Your Account</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body text-center px-4 pb-4">
+                    <p class="text-muted mb-4">1. Scan this QR code with Google Authenticator or Authy.</p>
+
+                    <div class="bg-white d-inline-block p-3 rounded-4 mb-3 shadow-sm">
+                        <img id="qrCodeImage" src="" alt="QR Code" class="img-fluid" style="width: 200px; height: 200px; display: none;">
+                        <div id="qrLoader" class="spinner-border text-primary my-5" role="status"></div>
+                    </div>
+
+                    <p class="small text-muted mb-1">Or enter this setup key manually:</p>
+                    <code id="secretKeyDisplay" class="d-block p-2 bg-secondary bg-opacity-25 rounded fs-5 text-warning fw-bold mb-4" style="letter-spacing: 2px;">Loading...</code>
+
+                    <p class="text-muted mb-2">2. Enter the 6-digit code from the app:</p>
+                    <input type="text" id="authSetupCode" class="form-control form-control-lg text-center fw-bold mb-4 bg-dark text-white border-secondary" placeholder="000000" maxlength="6" style="letter-spacing: 5px;">
+
+                    <button class="btn btn-primary w-100 fw-bold rounded-pill py-2" onclick="verifyGoogleAuthSetup()">
+                        Verify & Enable
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
 
     <div class="modal fade" id="promoteModal" tabindex="-1">
         <div class="modal-dialog">
@@ -224,6 +334,31 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+
+        // פונקציה להחלפת ערכת הנושא
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-bs-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            document.documentElement.setAttribute('data-bs-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeUI(newTheme);
+        }
+
+        // עדכון האייקון והממשק
+        function updateThemeUI(theme) {
+            const icon = document.getElementById('themeIcon');
+            if (icon) {
+                icon.innerText = theme === 'dark' ? '☀️' : '🌙';
+            }
+        }
+
+        // הרצה ראשונית כשהדף נטען
+        document.addEventListener('DOMContentLoaded', () => {
+            const currentTheme = document.documentElement.getAttribute('data-bs-theme');
+            updateThemeUI(currentTheme);
+        });
+
         const networkMapping = {
             "USDT": ["TRC20", "ERC20", "BEP20", "Polygon", "Solana", "Avalanche"],
             "BTC": ["Bitcoin (SegWit)", "Bitcoin (Legacy)", "BEP20"],
@@ -246,6 +381,34 @@
             }
         }
 
+
+        function updateCooldownTimers()
+        {
+            document.querySelectorAll('.cooldown-timer').forEach(el =>
+            {
+                const expireDate = new Date(el.dataset.expire).getTime();
+                const now = new Date().getTime();
+                const diff = expireDate - now;
+
+                if (diff <= 0) {
+                    el.innerText = "Activating...";
+                } else {
+                    const hours = Math.floor(diff / (1000 * 60 * 60));
+                    const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+                    const secs = Math.floor((diff % (1000 * 60)) / 1000);
+                    el.innerText = `${hours}h ${mins}m ${secs}s left`;
+                }
+            });
+        }
+        setInterval(updateCooldownTimers, 1000);
+
+        async function panicCancel(walletId)
+        {
+            if(!confirm("STOP! If you didn't request this wallet change, click OK to cancel and secure your account.")) return;
+            const res = await fetch(`/cancel-wallet-activation/${walletId}`, { method: 'POST' });
+            if(res.ok) location.reload();
+        }
+
         async function addNewWallet() {
             const currency = document.getElementById('newWalletCurrency').value;
             const network = document.getElementById('newWalletNetwork').value;
@@ -261,10 +424,39 @@
                 body: JSON.stringify({ currency: currency, network: network, address: address })
             });
 
+            const data = await res.json();
+
+            if (data.status === "2fa_required") {
+                const msgEl = document.getElementById('wallet2faMessage');
+                if (data.method === "authenticator") {
+                    msgEl.innerText = "Please enter the 6-digit code from your Google Authenticator app.";
+                } else {
+                    msgEl.innerText = "We sent a 6-digit code to your email to approve this wallet.";
+                }
+                document.getElementById('wallet2faBox').style.display = 'block';
+            } else if (res.ok) {
+                location.reload();
+            } else {
+                alert(data.error || "Error saving wallet.");
+            }
+        }
+
+        async function submitWallet2FA() {
+            const code = document.getElementById('walletVerificationCode').value;
+            if (code.length !== 6) return alert("Enter the 6 digit code");
+
+            const res = await fetch('/verify-wallet-2fa', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ code: code })
+            });
+
+            const data = await res.json();
             if (res.ok) {
                 location.reload();
             } else {
-                alert("Error saving wallet.");
+                alert(data.error);
+                if(res.status === 403) location.reload();
             }
         }
 
@@ -339,6 +531,107 @@
                 body: JSON.stringify({ product_id: id, days: days, payment_method: method })
             });
             if (res.ok) { alert("Promoted!"); location.reload(); }
+        }
+
+        let pendingDeleteId = null;
+        let deleteModal = null;
+
+        document.addEventListener("DOMContentLoaded", () => {
+            deleteModal = new bootstrap.Modal(document.getElementById('deleteWalletModal'));
+        });
+
+        async function requestDeleteWallet(walletId) {
+            if (!confirm("Are you sure you want to delete this wallet? You will need to wait 48 hours if you add a new one.")) return;
+
+            const res = await fetch('/request-delete-wallet', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ wallet_id: walletId })
+            });
+            const data = await res.json();
+
+            if (data.status === "2fa_required") {
+                const msgEl = document.getElementById('deleteWalletMessage');
+                if (data.method === "authenticator") {
+                    msgEl.innerText = "Please enter the 6-digit code from your Google Authenticator app.";
+                } else {
+                    msgEl.innerText = "We've sent a 6-digit code to your email to confirm deletion.";
+                }
+                pendingDeleteId = walletId;
+                deleteModal.show();
+            } else {
+                alert(data.error || "Error requesting deletion.");
+            }
+        }
+
+        async function submitDeleteWallet2FA() {
+            const code = document.getElementById('deleteWalletCode').value;
+            if(code.length !== 6) return alert("Enter 6 digits");
+
+            const res = await fetch('/verify-delete-wallet', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ code: code })
+            });
+            const data = await res.json();
+            if(res.ok) {
+                location.reload();
+            } else {
+                alert(data.error);
+                if(res.status === 403) location.reload();
+            }
+        }
+
+        // --- Google Authenticator Logic ---
+        async function startGoogleAuthSetup() {
+            const authModal = new bootstrap.Modal(document.getElementById('authSetupModal'));
+            authModal.show();
+
+            document.getElementById('qrCodeImage').style.display = 'none';
+            document.getElementById('qrLoader').style.display = 'inline-block';
+            document.getElementById('secretKeyDisplay').innerText = "Generating...";
+
+            try {
+                const res = await fetch('/setup-google-auth');
+                const data = await res.json();
+
+                if (res.ok) {
+                    document.getElementById('qrCodeImage').src = data.qr_code;
+                    document.getElementById('qrCodeImage').style.display = 'inline-block';
+                    document.getElementById('qrLoader').style.display = 'none';
+                    document.getElementById('secretKeyDisplay').innerText = data.secret;
+                } else {
+                    authModal.hide();
+                    alert(data.error);
+                }
+            } catch (e) {
+                console.error("Error setting up auth:", e);
+                alert("Connection failed. Try again.");
+            }
+        }
+
+        async function verifyGoogleAuthSetup() {
+            const code = document.getElementById('authSetupCode').value;
+            if(code.length !== 6) return alert("Please enter the 6-digit code.");
+
+            try {
+                const res = await fetch('/verify-google-auth-setup', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ code: code })
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    alert(data.message);
+                    location.reload();
+                } else {
+                    alert(data.error);
+                }
+            } catch (e) {
+                console.error("Verification error:", e);
+                alert("Verification failed.");
+            }
         }
     </script>
 </body>

@@ -1,5 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="light">
+<script>
+    // בדיקה מיידית של ערכת הנושא כדי למנוע הבהוב לבן בטעינה
+    (function() {
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-bs-theme', savedTheme);
+    })();
+</script>
 <head>
     <meta charset="UTF-8">
     <title>Orders Dashboard</title>
@@ -10,6 +17,33 @@
         .status-badge { font-weight: bold; padding: 6px 12px; border-radius: 8px; text-transform: uppercase; font-size: 0.8rem; }
         .payment-info { background: #fff4f2; border: 1px dashed #dc3545; border-radius: 10px; padding: 20px; margin-top: 15px; }
         .wallet-address { font-family: monospace; word-break: break-all; background: white; padding: 10px; border-radius: 5px; border: 1px solid #ced4da; margin-top: 10px; display: block; }
+        /* --- Dark Mode Custom Overrides --- */
+        [data-bs-theme="dark"] body {
+            background-color: #121212 !important;
+            color: #e0e0e0;
+        }
+        [data-bs-theme="dark"] .card,
+        [data-bs-theme="dark"] .stat-box,
+        [data-bs-theme="dark"] .order-card,
+        [data-bs-theme="dark"] .review-card {
+            background-color: #1e1e1e !important;
+            color: #fff !important;
+            border-color: #333 !important;
+        }
+        [data-bs-theme="dark"] .list-group-item {
+            background-color: #1e1e1e;
+            color: #fff;
+            border-color: #333;
+        }
+        [data-bs-theme="dark"] .navbar {
+            border-bottom: 1px solid #333;
+        }
+        [data-bs-theme="dark"] .bg-white, [data-bs-theme="dark"] .bg-light {
+            background-color: #1e1e1e !important;
+        }
+        [data-bs-theme="dark"] .text-muted {
+            color: #aaa !important;
+        }
     </style>
 </head>
 <body>
@@ -130,6 +164,30 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        // פונקציה להחלפת ערכת הנושא
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-bs-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            document.documentElement.setAttribute('data-bs-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeUI(newTheme);
+        }
+
+        // עדכון האייקון והממשק
+        function updateThemeUI(theme) {
+            const icon = document.getElementById('themeIcon');
+            if (icon) {
+                icon.innerText = theme === 'dark' ? '☀️' : '🌙';
+            }
+        }
+
+        // הרצה ראשונית כשהדף נטען
+        document.addEventListener('DOMContentLoaded', () => {
+            const currentTheme = document.documentElement.getAttribute('data-bs-theme');
+            updateThemeUI(currentTheme);
+        });
+
         // Advanced Countdown Logic (Supports Days, Hours, Minutes, Seconds)
         function updateTimers() {
             document.querySelectorAll('.timer-display').forEach(el => {

@@ -1,5 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="light">
+<script>
+    // בדיקה מיידית של ערכת הנושא כדי למנוע הבהוב לבן בטעינה
+    (function() {
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-bs-theme', savedTheme);
+    })();
+</script>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -34,6 +41,33 @@
 
         .g_id_signin { display: flex; justify-content: center; }
         .g_id_signin > div { width: 100% !important; border-radius: 10px !important; overflow: hidden; }
+        /* --- Dark Mode Custom Overrides --- */
+        [data-bs-theme="dark"] body {
+            background-color: #121212 !important;
+            color: #e0e0e0;
+        }
+        [data-bs-theme="dark"] .card,
+        [data-bs-theme="dark"] .stat-box,
+        [data-bs-theme="dark"] .order-card,
+        [data-bs-theme="dark"] .review-card {
+            background-color: #1e1e1e !important;
+            color: #fff !important;
+            border-color: #333 !important;
+        }
+        [data-bs-theme="dark"] .list-group-item {
+            background-color: #1e1e1e;
+            color: #fff;
+            border-color: #333;
+        }
+        [data-bs-theme="dark"] .navbar {
+            border-bottom: 1px solid #333;
+        }
+        [data-bs-theme="dark"] .bg-white, [data-bs-theme="dark"] .bg-light {
+            background-color: #1e1e1e !important;
+        }
+        [data-bs-theme="dark"] .text-muted {
+            color: #aaa !important;
+        }
     </style>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -110,11 +144,87 @@
                 </form>
             </div>
         </div>
+
+        <div id="twoFactorBox" style="display: none;" class="mt-4 text-center">
+            <h5 class="fw-bold">Security Verification</h5>
+            <p id="login2faMessage" class="text-muted small">We've sent a 6-digit code to your email.</p>
+            <div class="mb-3">
+                <input type="text" class="form-control text-center fs-3 letter-spacing-2 fw-bold" id="verificationCode" placeholder="000000" maxlength="6">
+            </div>
+            <button class="btn btn-warning btn-main w-100" onclick="submit2FA()">Verify & Login</button>
+        </div>
+
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
+        // פונקציה להחלפת ערכת הנושא
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-bs-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            document.documentElement.setAttribute('data-bs-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeUI(newTheme);
+        }
+
+        // עדכון האייקון והממשק
+        function updateThemeUI(theme) {
+            const icon = document.getElementById('themeIcon');
+            if (icon) {
+                icon.innerText = theme === 'dark' ? '☀️' : '🌙';
+            }
+        }
+
+        // הרצה ראשונית כשהדף נטען
+        document.addEventListener('DOMContentLoaded', () => {
+            const currentTheme = document.documentElement.getAttribute('data-bs-theme');
+            updateThemeUI(currentTheme);
+        });
+
+        function show2FABox(method) {
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('register').style.display = 'none';
+            document.getElementById('authTabs').style.display = 'none';
+            document.querySelector('.social-grid').style.display = 'none';
+            document.querySelector('.divider').style.display = 'none';
+
+            // Note: We are NO LONGER hiding the "Welcome Back" header!
+
+            const msgEl = document.getElementById('login2faMessage');
+            if (method === "authenticator") {
+                msgEl.innerText = "Please enter the 6-digit code from your Google Authenticator app.";
+            } else {
+                msgEl.innerText = "We've sent a 6-digit code to your email.";
+            }
+
+            document.getElementById('twoFactorBox').style.display = 'block';
+        }
+
+        window.onload = function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            if(urlParams.get('2fa') === 'true') { show2FABox("email"); }
+        }
+
+        async function submit2FA() {
+            const code = document.getElementById('verificationCode').value;
+            if(code.length !== 6) return alert("Enter the 6 digit code");
+
+            const res = await fetch('/verify-2fa', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ code: code })
+            });
+            const data = await res.json();
+            if(res.ok) {
+                window.location.href = '/';
+            } else {
+                alert(data.error);
+                if(res.status === 403) location.reload();
+            }
+        }
+
         async function handleGoogleLogin(response) {
             try {
                 const res = await fetch('/google-login', {
@@ -122,21 +232,17 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ credential: response.credential })
                 });
-
                 const data = await res.json();
-
-                if (res.ok) {
-                    window.location.href = '/';
+                if (data.status === "2fa_required") {
+                    show2FABox(data.method);
                 } else {
                     alert(data.error || "Google login failed");
                 }
-            } catch (error) {
-                console.error("Error logging in with Google", error);
-            }
+            } catch (error) { console.error(error); }
         }
 
         function mockSocialAuth(provider) {
-            alert(`Connecting with ${provider}...\n\n(Developer Note: Waiting for API keys from ${provider} Developer Console to complete backend integration)`);
+            alert(`Connecting with ${provider}... waiting for API keys.`);
         }
 
         document.getElementById('registerForm').addEventListener('submit', async (e) => {
@@ -187,7 +293,9 @@
 
             const data = await res.json();
 
-            if (res.ok) {
+            if (data.status === "2fa_required") {
+                show2FABox(data.method);
+            } else if (res.ok) {
                 window.location.href = '/';
             } else {
                 if (data.need_verify) {

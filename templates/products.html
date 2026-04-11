@@ -1,5 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="light">
+<script>
+    // בדיקה מיידית של ערכת הנושא כדי למנוע הבהוב לבן בטעינה
+    (function() {
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-bs-theme', savedTheme);
+    })();
+</script>
 <head>
     <meta charset="UTF-8">
     <title>{{ product.title }} - Details</title>
@@ -68,39 +75,85 @@
         .chat-btn { width: 100%; padding: 10px; font-weight: bold; font-size: 1.1rem; }
 
         .text-decoration-none { text-decoration: none !important; }
+        /* --- Dark Mode Custom Overrides for Product Page --- */
+        [data-bs-theme="dark"] body {
+            background-color: #121212 !important;
+            color: #e0e0e0;
+        }
+        [data-bs-theme="dark"] .product-container {
+            background-color: #1e1e1e !important;
+            border: 1px solid #333;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        [data-bs-theme="dark"] .details-section {
+            color: #fff;
+        }
+        [data-bs-theme="dark"] .seller-badge {
+            background-color: #2a2a2a !important;
+            color: #fff;
+        }
+        [data-bs-theme="dark"] .seller-badge:hover {
+            background-color: #333 !important;
+        }
+        [data-bs-theme="dark"] .text-dark {
+            color: #e0e0e0 !important;
+        }
+        [data-bs-theme="dark"] .bg-light,
+        [data-bs-theme="dark"] .seller-avatar.bg-secondary {
+            background-color: #2a2a2a !important;
+            color: #e0e0e0 !important;
+        }
+        [data-bs-theme="dark"] .text-muted {
+            color: #aaa !important;
+        }
+        [data-bs-theme="dark"] .navbar {
+            border-bottom: 1px solid #333;
+        }
+
+
     </style>
 </head>
 <body>
 
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-3 sticky-top shadow-sm">
-        <div class="container">
-            <a class="navbar-brand fw-bold" href="/">
-                🛒 CRYPTO <span class="text-warning">MARKETPLACE</span>
+    <nav class="navbar navbar-expand-lg navbar-dark sticky-top p-3" style="background-color: #1a1b1e; border-bottom: 1px solid #333;">
+        <div class="container-fluid px-4 d-flex align-items-center justify-content-between">
+
+            <a class="navbar-brand d-flex align-items-center gap-2 fw-bold fs-4 m-0" href="/" style="color: #f3ba2f; letter-spacing: 1px; min-width: max-content;">
+                <span class="fs-3">🛒</span> CRYPTO <span class="text-white">MARKETPLACE</span>
             </a>
 
-            <form action="/" method="get" class="d-flex mx-auto position-relative" style="width: 40%;">
-                <input class="form-control rounded-pill px-4" type="search" name="q" placeholder="Search items..." required>
+            <form class="d-flex flex-grow-1 mx-4 mx-lg-5" action="/" method="GET">
+                <input class="form-control rounded-pill border-0 px-4 py-2 w-100" type="search" name="q" placeholder="Search items..." style="background-color: #fff; color: #000; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);">
             </form>
 
-            <div class="d-flex align-items-center">
-                {% if user %}
-                    <div class="me-3 text-white d-none d-md-block" style="background: rgba(255,255,255,0.1); padding: 5px 15px; border-radius: 20px;">
-                        <span class="text-warning fw-bold" id="userBalance">Loading...</span> FREE
-                    </div>
+            <div class="d-flex align-items-center gap-3" style="min-width: max-content;">
 
-                    <a href="/inbox" class="btn btn-outline-light btn-sm me-2 rounded-pill position-relative">
-                        📩 Inbox
-                        <span id="msgBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display: none;">0</span>
-                    </a>
+                <a href="/inbox" class="btn btn-outline-light rounded-pill px-4 fw-bold d-flex align-items-center gap-2">
+                    📩 Inbox
+                </a>
 
-                    <a href="/my-profile" class="text-white me-3 text-decoration-none fw-bold">
-                        {{ user }} 👤
-                    </a>
-                    <a href="/logout" class="btn btn-danger btn-sm rounded-pill">Logout</a>
-                {% else %}
-                    <a href="/login-page" class="btn btn-warning fw-bold rounded-pill">Login / Register</a>
-                {% endif %}
+                <div class="dropdown">
+                    <button class="btn btn-dark dropdown-toggle d-flex align-items-center gap-2 border-0 fw-bold px-3 py-2 rounded-pill" type="button" id="userMenu" data-bs-toggle="dropdown" aria-expanded="false" style="background: #2a2a2a;">
+                        {{ session['username'] }} 👤
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2" aria-labelledby="userMenu" style="border-radius: 12px; min-width: 220px;">
+                        <li><a class="dropdown-item py-2 fw-bold" href="/my-profile">👤 My Profile</a></li>
+                        <li><a class="dropdown-item py-2 fw-bold" href="/orders">📦 Escrow Dashboard</a></li>
+                        <li><hr class="dropdown-divider"></li>
+
+                        <li>
+                            <button class="dropdown-item py-2 fw-bold d-flex justify-content-between align-items-center" onclick="toggleTheme()">
+                                <span>🌗 Appearance</span>
+                                <span id="themeIcon">🌙</span>
+                            </button>
+                        </li>
+
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item py-2 text-danger fw-bold" href="/logout">🚪 Logout</a></li>
+                    </ul>
+                </div>
             </div>
+
         </div>
     </nav>
 
@@ -237,6 +290,50 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+
+        // --- Fetch Unified Wallet Balance ---
+        async function loadWalletBalance() {
+            try {
+                const res = await fetch('/api/user-data');
+                const data = await res.json();
+                if(res.ok) {
+                    const balanceEl = document.getElementById('walletBalance');
+                    if(balanceEl) {
+                        balanceEl.innerText = parseFloat(data.wallet_balance).toFixed(2);
+                    }
+                }
+            } catch (e) {
+                console.error("Error loading balance:", e);
+            }
+        }
+
+        // Run when page loads
+        document.addEventListener('DOMContentLoaded', loadWalletBalance);
+
+        // פונקציה להחלפת ערכת הנושא
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-bs-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            document.documentElement.setAttribute('data-bs-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeUI(newTheme);
+        }
+
+        // עדכון האייקון והממשק
+        function updateThemeUI(theme) {
+            const icon = document.getElementById('themeIcon');
+            if (icon) {
+                icon.innerText = theme === 'dark' ? '☀️' : '🌙';
+            }
+        }
+
+        // הרצה ראשונית כשהדף נטען
+        document.addEventListener('DOMContentLoaded', () => {
+            const currentTheme = document.documentElement.getAttribute('data-bs-theme');
+            updateThemeUI(currentTheme);
+        });
+
         async function startChat()
         {
             const msg = document.getElementById('quickMsg') ? document.getElementById('quickMsg').value : '';
